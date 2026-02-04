@@ -34,6 +34,6 @@ public class TimeEntry : Entity
         HoursWorked = Math.Round((decimal)(ClockOut.Value - ClockIn).TotalHours, 2);
         SetUpdated();
 
-        AddDomainEvent(new EmployeeClockedOutEvent(Id, EmployeeId, ClockOut.Value, HoursWorked));
+        AddDomainEvent(new EmployeeClockedOutEvent(Id, EmployeeId, ClockIn, ClockOut.Value, HoursWorked));
     }
 }

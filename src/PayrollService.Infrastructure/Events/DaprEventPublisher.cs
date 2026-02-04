@@ -18,7 +18,18 @@ public class DaprEventPublisher : IEventPublisher
     public async Task PublishAsync(DomainEvent domainEvent, CancellationToken cancellationToken = default)
     {
         var topicName = GetTopicName(domainEvent.EventType);
-        await _daprClient.PublishEventAsync(PubSubName, topicName, domainEvent, cancellationToken);
+
+        // Serialize with the actual runtime type to include all derived properties
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            WriteIndented = false
+        };
+
+        var json = JsonSerializer.Serialize(domainEvent, domainEvent.GetType(), options);
+        var eventData = JsonSerializer.Deserialize<object>(json);
+
+        await _daprClient.PublishEventAsync(PubSubName, topicName, eventData, cancellationToken);
     }
 
     public async Task PublishAsync(IEnumerable<DomainEvent> domainEvents, CancellationToken cancellationToken = default)

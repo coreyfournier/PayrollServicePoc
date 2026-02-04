@@ -32,7 +32,7 @@ public class Deduction : Entity
             IsActive = true
         };
 
-        deduction.AddDomainEvent(new DeductionCreatedEvent(deduction.Id, employeeId, deductionType, amount));
+        deduction.AddDomainEvent(new DeductionCreatedEvent(deduction.Id, employeeId, deductionType, description, amount, isPercentage));
         return deduction;
     }
 
@@ -44,7 +44,7 @@ public class Deduction : Entity
         IsPercentage = isPercentage;
         SetUpdated();
 
-        AddDomainEvent(new DeductionUpdatedEvent(Id, EmployeeId, deductionType, amount));
+        AddDomainEvent(new DeductionUpdatedEvent(Id, EmployeeId, deductionType, description, amount, isPercentage));
     }
 
     public void Deactivate()

@@ -38,7 +38,16 @@ public class TaxInformation : Entity
             AdditionalStateWithholding = additionalStateWithholding
         };
 
-        taxInfo.AddDomainEvent(new TaxInformationCreatedEvent(taxInfo.Id, employeeId));
+        taxInfo.AddDomainEvent(new TaxInformationCreatedEvent(
+            taxInfo.Id,
+            employeeId,
+            federalFilingStatus,
+            federalAllowances,
+            additionalFederalWithholding,
+            state,
+            stateFilingStatus,
+            stateAllowances,
+            additionalStateWithholding));
         return taxInfo;
     }
 
@@ -60,6 +69,15 @@ public class TaxInformation : Entity
         AdditionalStateWithholding = additionalStateWithholding;
         SetUpdated();
 
-        AddDomainEvent(new TaxInformationUpdatedEvent(Id, EmployeeId));
+        AddDomainEvent(new TaxInformationUpdatedEvent(
+            Id,
+            EmployeeId,
+            federalFilingStatus,
+            federalAllowances,
+            additionalFederalWithholding,
+            state,
+            stateFilingStatus,
+            stateAllowances,
+            additionalStateWithholding));
     }
 }

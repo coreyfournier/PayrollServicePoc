@@ -9,14 +9,18 @@ public class DeductionCreatedEvent : DomainEvent
     public Guid DeductionId { get; }
     public Guid EmployeeId { get; }
     public DeductionType DeductionType { get; }
+    public string Description { get; }
     public decimal Amount { get; }
+    public bool IsPercentage { get; }
 
-    public DeductionCreatedEvent(Guid deductionId, Guid employeeId, DeductionType deductionType, decimal amount)
+    public DeductionCreatedEvent(Guid deductionId, Guid employeeId, DeductionType deductionType, string description, decimal amount, bool isPercentage)
     {
         DeductionId = deductionId;
         EmployeeId = employeeId;
         DeductionType = deductionType;
+        Description = description;
         Amount = amount;
+        IsPercentage = isPercentage;
     }
 }
 
@@ -26,14 +30,18 @@ public class DeductionUpdatedEvent : DomainEvent
     public Guid DeductionId { get; }
     public Guid EmployeeId { get; }
     public DeductionType DeductionType { get; }
+    public string Description { get; }
     public decimal Amount { get; }
+    public bool IsPercentage { get; }
 
-    public DeductionUpdatedEvent(Guid deductionId, Guid employeeId, DeductionType deductionType, decimal amount)
+    public DeductionUpdatedEvent(Guid deductionId, Guid employeeId, DeductionType deductionType, string description, decimal amount, bool isPercentage)
     {
         DeductionId = deductionId;
         EmployeeId = employeeId;
         DeductionType = deductionType;
+        Description = description;
         Amount = amount;
+        IsPercentage = isPercentage;
     }
 }
 
