@@ -1,5 +1,6 @@
 using ListenerApi.Data.DbContext;
 using ListenerApi.Data.Entities;
+using Microsoft.EntityFrameworkCore;
 
 namespace ListenerApi.Data.Repositories;
 
@@ -28,5 +29,13 @@ public class EmployeeRecordRepository : IEmployeeRecordRepository
     {
         _context.EmployeeRecords.Update(record);
         await _context.SaveChangesAsync();
+    }
+
+    public async Task<int> DeleteAllAsync()
+    {
+        var count = await _context.EmployeeRecords.CountAsync();
+        _context.EmployeeRecords.RemoveRange(_context.EmployeeRecords);
+        await _context.SaveChangesAsync();
+        return count;
     }
 }

@@ -8,4 +8,5 @@ public interface IEmployeeRecordRepository
     Task<IQueryable<EmployeeRecord>> GetAllAsync();
     Task AddAsync(EmployeeRecord record);
     Task UpdateAsync(EmployeeRecord record);
+    Task<int> DeleteAllAsync();
 }

@@ -1,6 +1,7 @@
 using ListenerApi.Data.DbContext;
 using ListenerApi.Data.Repositories;
 using ListenerApi.Data.Services;
+using ListenerApi.GraphQL.Mutations;
 using ListenerApi.GraphQL.Queries;
 using ListenerApi.GraphQL.Subscriptions;
 using Microsoft.EntityFrameworkCore;
@@ -37,6 +38,7 @@ builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher
 builder.Services
     .AddGraphQLServer()
     .AddQueryType<EmployeeQuery>()
+    .AddMutationType<EmployeeMutation>()
     .AddSubscriptionType<EmployeeSubscription>()
     .AddInMemorySubscriptions()
     .AddFiltering()
