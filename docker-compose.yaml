@@ -84,6 +84,28 @@ services:
       retries: 5
       start_period: 10s
 
+  # MySQL database
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: listener_db
+      MYSQL_USER: listener_user
+      MYSQL_PASSWORD: listener_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - payroll-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # Zipkin for distributed tracing
   zipkin:
     image: openzipkin/zipkin:latest
@@ -176,9 +198,74 @@ services:
     networks:
       - payroll-network
 
+  # ListenerApi Service
+  listener-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.listenerapi
+    container_name: listener-api
+    ports:
+      - "5001:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ConnectionStrings__DefaultConnection=Server=mysql;Database=listener_db;User=listener_user;Password=listener_password;
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - payroll-network
+    healthcheck:
+      test: curl -sf http://localhost:80/graphql || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # Dapr sidecar for ListenerApi
+  listener-api-dapr:
+    image: "daprio/daprd:1.13.0"
+    container_name: listener-api-dapr
+    command: [
+      "./daprd",
+      "-app-id", "listener-api",
+      "-app-port", "80",
+      "-dapr-http-port", "3501",
+      "-dapr-grpc-port", "50002",
+      "-resources-path", "/components",
+      "-config", "/config/config.yaml"
+    ]
+    volumes:
+      - ./dapr/components:/components
+      - ./dapr:/config
+    depends_on:
+      listener-api:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    network_mode: "service:listener-api"
+    restart: on-failure
+
+  # ListenerClient Frontend
+  listener-client:
+    build:
+      context: ./listenerClient
+      dockerfile: Dockerfile
+    container_name: listener-client
+    ports:
+      - "3001:80"
+    depends_on:
+      listener-api:
+        condition: service_healthy
+    networks:
+      - payroll-network
+
 networks:
   payroll-network:
     driver: bridge
 
 volumes:
   mongodb_data:
+  mysql_data:
