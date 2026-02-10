@@ -6,7 +6,9 @@
       "Bash(docker logs:*)",
       "Bash(docker-compose down:*)",
       "Bash(docker-compose up:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "Bash(curl:*)",
+      "WebSearch"
     ]
   }
 }

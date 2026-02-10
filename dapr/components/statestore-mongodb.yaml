@@ -1,0 +1,26 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore-mongodb
+spec:
+  type: state.mongodb
+  version: v1
+  metadata:
+    - name: host
+      value: "mongodb:27017"
+    - name: databaseName
+      value: "payroll_db"
+    - name: collectionName
+      value: "dapr_state"
+    - name: actorStateStore
+      value: "false"
+    # Replica set configuration for transactions
+    - name: params
+      value: "replicaSet=rs0"
+    # Outbox configuration - enables atomic state + event publishing
+    - name: outboxPublishPubsub
+      value: "kafka-pubsub"
+    - name: outboxPublishTopic
+      value: "employee-events"
+    - name: outboxDiscardWhenMissingState
+      value: "false"

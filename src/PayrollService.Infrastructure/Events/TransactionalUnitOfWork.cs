@@ -31,7 +31,7 @@ public class TransactionalUnitOfWork : IUnitOfWork
             var outboxMessage = new OutboxMessage
             {
                 EventType = domainEvent.EventType,
-                EventData = JsonSerializer.Serialize(domainEvent, domainEvent.GetType()),
+                EventData = domainEvent,
                 CreatedAt = DateTime.UtcNow
             };
             await _context.OutboxMessages.InsertOneAsync(outboxMessage, cancellationToken: cancellationToken);

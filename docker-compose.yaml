@@ -67,10 +67,11 @@ services:
     networks:
       - payroll-network
 
-  # MongoDB database
+  # MongoDB database (replica set for transaction support)
   mongodb:
     image: mongo:7.0
     container_name: mongodb
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "27017:27017"
     volumes:
@@ -78,11 +79,20 @@ services:
     networks:
       - payroll-network
     healthcheck:
-      test: mongosh --eval 'db.runCommand("ping").ok' --quiet || exit 1
+      test: |
+        mongosh --eval '
+          try {
+            rs.status().ok
+          } catch(e) {
+            rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongodb:27017"}]});
+            sleep(1000);
+            rs.status().ok
+          }
+        ' --quiet || exit 1
       interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
 
   # MySQL database
   mysql:
@@ -142,8 +152,12 @@ services:
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:80
-      - MongoDB__ConnectionString=mongodb://mongodb:27017
+      - MongoDB__ConnectionString=mongodb://mongodb:27017/?replicaSet=rs0
       - MongoDB__DatabaseName=payroll_db
+      - Features__UseDaprOutbox=true
+      # Dapr sidecar endpoint configuration
+      - DAPR_HTTP_ENDPOINT=http://payroll-api-dapr:3500
+      - DAPR_GRPC_ENDPOINT=http://payroll-api-dapr:50001
     depends_on:
       mongodb:
         condition: service_healthy
@@ -160,17 +174,21 @@ services:
 
   # Dapr sidecar for Payroll API
   payroll-api-dapr:
-    image: "daprio/daprd:1.13.0"
+    image: "daprio/daprd:1.16.0"
     container_name: payroll-api-dapr
     command: [
       "./daprd",
       "-app-id", "payroll-api",
       "-app-port", "80",
+      "-app-channel-address", "payroll-api",
       "-dapr-http-port", "3500",
       "-dapr-grpc-port", "50001",
       "-resources-path", "/components",
       "-config", "/config/config.yaml"
     ]
+    ports:
+      - "3500:3500"   # Dapr HTTP port
+      - "50001:50001" # Dapr gRPC port
     volumes:
       - ./dapr/components:/components
       - ./dapr:/config
@@ -181,7 +199,8 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_healthy
-    network_mode: "service:payroll-api"
+    networks:
+      - payroll-network
     restart: on-failure
 
   # Frontend Application

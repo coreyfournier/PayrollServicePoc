@@ -33,7 +33,8 @@ builder.Services.AddDaprClient();
 // Add Infrastructure services
 var mongoConnectionString = builder.Configuration.GetValue<string>("MongoDB:ConnectionString") ?? "mongodb://localhost:27017";
 var mongoDatabaseName = builder.Configuration.GetValue<string>("MongoDB:DatabaseName") ?? "payroll_db";
-builder.Services.AddInfrastructure(mongoConnectionString, mongoDatabaseName);
+var useDaprOutbox = builder.Configuration.GetValue<bool>("Features:UseDaprOutbox");
+builder.Services.AddInfrastructure(mongoConnectionString, mongoDatabaseName, useDaprOutbox);
 
 var app = builder.Build();
 

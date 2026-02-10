@@ -54,3 +54,5 @@ bld/
 
 ## macOS
 .DS_Store
+
+/.claude
