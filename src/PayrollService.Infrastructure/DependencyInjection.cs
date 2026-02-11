@@ -1,11 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using PayrollService.Application.Interfaces;
 using PayrollService.Domain.Repositories;
-using PayrollService.Infrastructure.Events;
-using PayrollService.Infrastructure.Persistence;
-using PayrollService.Infrastructure.Repositories;
+using PayrollService.Infrastructure.Orleans;
+using PayrollService.Infrastructure.Orleans.Events;
+using PayrollService.Infrastructure.Orleans.Repositories;
 using PayrollService.Infrastructure.Seeding;
-using PayrollService.Infrastructure.StateStore;
 
 namespace PayrollService.Infrastructure;
 
@@ -15,37 +15,27 @@ public static class DependencyInjection
         this IServiceCollection services,
         string connectionString,
         string databaseName,
-        bool useDaprOutbox = false)
+        string kafkaBrokers = "localhost:9092")
     {
-        // Register MongoDB context
-        services.AddSingleton(sp => new MongoDbContext(connectionString, databaseName));
-
-        if (useDaprOutbox)
+        // Register Kafka event publisher as singleton
+        services.AddSingleton<IKafkaEventPublisher>(sp =>
         {
-            // Register Dapr hybrid repositories (writes via Dapr outbox, reads via MongoDB)
-            services.AddScoped<IEmployeeRepository, DaprEmployeeRepository>();
-            services.AddScoped<ITimeEntryRepository, DaprTimeEntryRepository>();
-            services.AddScoped<ITaxInformationRepository, DaprTaxInformationRepository>();
-            services.AddScoped<IDeductionRepository, DaprDeductionRepository>();
+            var logger = sp.GetRequiredService<ILogger<KafkaEventPublisher>>();
+            return new KafkaEventPublisher(kafkaBrokers, logger);
+        });
 
-            // Register Dapr state store unit of work (uses native outbox pattern)
-            services.AddScoped<IUnitOfWork, DaprStateStoreUnitOfWork>();
-        }
-        else
-        {
-            // Register legacy MongoDB-only repositories
-            services.AddScoped<IEmployeeRepository, EmployeeRepository>();
-            services.AddScoped<ITimeEntryRepository, TimeEntryRepository>();
-            services.AddScoped<ITaxInformationRepository, TaxInformationRepository>();
-            services.AddScoped<IDeductionRepository, DeductionRepository>();
+        // Register Orleans repositories
+        services.AddScoped<IEmployeeRepository, OrleansEmployeeRepository>();
+        services.AddScoped<ITimeEntryRepository, OrleansTimeEntryRepository>();
+        services.AddScoped<ITaxInformationRepository, OrleansTaxInformationRepository>();
+        services.AddScoped<IDeductionRepository, OrleansDeductionRepository>();
 
-            // Register legacy event publisher and unit of work
-            services.AddScoped<IEventPublisher, DaprEventPublisher>();
-            services.AddScoped<IUnitOfWork, TransactionalUnitOfWork>();
-        }
+        // Register Orleans unit of work (events published by grains)
+        services.AddScoped<IUnitOfWork, OrleansUnitOfWork>();
 
-        // Register data seeder
+        // Register data seeder as hosted service
         services.AddScoped<DataSeeder>();
+        services.AddHostedService<DataSeederHostedService>();
 
         return services;
     }

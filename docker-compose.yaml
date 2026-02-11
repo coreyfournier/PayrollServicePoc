@@ -141,7 +141,7 @@ services:
     networks:
       - payroll-network
 
-  # Payroll API Service
+  # Payroll API Service (Orleans)
   payroll-api:
     build:
       context: .
@@ -154,10 +154,7 @@ services:
       - ASPNETCORE_URLS=http://+:80
       - MongoDB__ConnectionString=mongodb://mongodb:27017/?replicaSet=rs0
       - MongoDB__DatabaseName=payroll_db
-      - Features__UseDaprOutbox=true
-      # Dapr sidecar endpoint configuration
-      - DAPR_HTTP_ENDPOINT=http://payroll-api-dapr:3500
-      - DAPR_GRPC_ENDPOINT=http://payroll-api-dapr:50001
+      - Kafka__Brokers=kafka:9092
     depends_on:
       mongodb:
         condition: service_healthy
@@ -171,37 +168,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
-
-  # Dapr sidecar for Payroll API
-  payroll-api-dapr:
-    image: "daprio/daprd:1.16.0"
-    container_name: payroll-api-dapr
-    command: [
-      "./daprd",
-      "-app-id", "payroll-api",
-      "-app-port", "80",
-      "-app-channel-address", "payroll-api",
-      "-dapr-http-port", "3500",
-      "-dapr-grpc-port", "50001",
-      "-resources-path", "/components",
-      "-config", "/config/config.yaml"
-    ]
-    ports:
-      - "3500:3500"   # Dapr HTTP port
-      - "50001:50001" # Dapr gRPC port
-    volumes:
-      - ./dapr/components:/components
-      - ./dapr:/config
-    depends_on:
-      payroll-api:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      mongodb:
-        condition: service_healthy
-    networks:
-      - payroll-network
-    restart: on-failure
 
   # Frontend Application
   frontend:

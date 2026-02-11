@@ -1,7 +1,6 @@
+using Orleans.Configuration;
 using PayrollService.Application.Commands.Employee;
 using PayrollService.Infrastructure;
-using PayrollService.Infrastructure.Persistence;
-using PayrollService.Infrastructure.Seeding;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,7 +16,7 @@ builder.Services.AddCors(options =>
 });
 
 // Add services to the container
-builder.Services.AddControllers().AddDapr();
+builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -27,26 +26,36 @@ builder.Services.AddSwaggerGen(c =>
 // Add MediatR
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(CreateEmployeeCommand).Assembly));
 
-// Add Dapr client
-builder.Services.AddDaprClient();
-
-// Add Infrastructure services
+// Configuration
 var mongoConnectionString = builder.Configuration.GetValue<string>("MongoDB:ConnectionString") ?? "mongodb://localhost:27017";
 var mongoDatabaseName = builder.Configuration.GetValue<string>("MongoDB:DatabaseName") ?? "payroll_db";
-var useDaprOutbox = builder.Configuration.GetValue<bool>("Features:UseDaprOutbox");
-builder.Services.AddInfrastructure(mongoConnectionString, mongoDatabaseName, useDaprOutbox);
+var kafkaBrokers = builder.Configuration.GetValue<string>("Kafka:Brokers") ?? "localhost:9092";
+
+// Configure Orleans
+builder.Host.UseOrleans(siloBuilder =>
+{
+    siloBuilder.UseLocalhostClustering();
+
+    // MongoDB persistence for grain state
+    siloBuilder.UseMongoDBClient(mongoConnectionString)
+        .AddMongoDBGrainStorage("MongoDBStore", options =>
+        {
+            options.DatabaseName = mongoDatabaseName;
+            options.CollectionPrefix = "orleans_";
+        });
+
+    // Configure cluster options
+    siloBuilder.Configure<ClusterOptions>(options =>
+    {
+        options.ClusterId = "payroll-cluster";
+        options.ServiceId = "PayrollService";
+    });
+});
+
+// Add Infrastructure services (includes Kafka event publisher)
+builder.Services.AddInfrastructure(mongoConnectionString, mongoDatabaseName, kafkaBrokers);
 
 var app = builder.Build();
-
-// Initialize database and seed data
-using (var scope = app.Services.CreateScope())
-{
-    var dbContext = scope.ServiceProvider.GetRequiredService<MongoDbContext>();
-    await dbContext.InitializeAsync();
-
-    var seeder = scope.ServiceProvider.GetRequiredService<DataSeeder>();
-    await seeder.SeedAsync();
-}
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
@@ -56,8 +65,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
-app.UseCloudEvents();
 app.MapControllers();
-app.MapSubscribeHandler();
 
 app.Run();
