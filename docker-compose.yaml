@@ -262,6 +262,31 @@ services:
     networks:
       - payroll-network
 
+  # Chatbot API Service (Claude-powered payroll assistant)
+  chatbot-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chatbotapi
+    container_name: chatbot-api
+    ports:
+      - "5002:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PayrollApi__BaseUrl=http://payroll-api:80
+    depends_on:
+      payroll-api:
+        condition: service_healthy
+    networks:
+      - payroll-network
+    healthcheck:
+      test: curl -sf http://localhost:80/health || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
 networks:
   payroll-network:
     driver: bridge

@@ -6,7 +6,19 @@
       "Bash(docker logs:*)",
       "Bash(docker-compose down:*)",
       "Bash(docker-compose up:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "Bash(git -C \"C:\\\\Source\\\\Repos\\\\payrollservicepoc\" log --oneline -10)",
+      "WebSearch",
+      "WebFetch(domain:www.nuget.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(dotnet tool list:*)",
+      "Bash(dotnet tool install:*)",
+      "Bash(dotnet-ildasm:*)",
+      "Bash(dotnet run:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(timeout 30 bash:*)",
+      "Bash(curl:*)"
     ]
   }
 }
