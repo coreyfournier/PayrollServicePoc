@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Plus, Users, DollarSign, Clock, FileText, Edit, Trash2, X } from 'lucide-react';
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee } from '../api';
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, getEwaBalance } from '../api';
 import { format } from 'date-fns';
 
 const PAY_TYPES = { 1: 'Hourly', 2: 'Salary' };
@@ -11,6 +11,7 @@ function EmployeeList() {
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [balances, setBalances] = useState({});
   const [showModal, setShowModal] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [formData, setFormData] = useState({
@@ -30,6 +31,21 @@ function EmployeeList() {
     try {
       const response = await getEmployees();
       setEmployees(response.data);
+
+      // Fetch EWA balances for all employees in parallel
+      const balanceResults = await Promise.allSettled(
+        response.data.map(emp => getEwaBalance(emp.id))
+      );
+      const balanceMap = {};
+      response.data.forEach((emp, index) => {
+        const result = balanceResults[index];
+        if (result.status === 'fulfilled') {
+          balanceMap[emp.id] = { available: true, amount: result.value.data.finalBalance ?? 0 };
+        } else {
+          balanceMap[emp.id] = { available: false };
+        }
+      });
+      setBalances(balanceMap);
     } catch (error) {
       console.error('Error loading employees:', error);
     } finally {
@@ -197,6 +213,7 @@ function EmployeeList() {
                 <th>Pay Rate</th>
                 <th>Hire Date</th>
                 <th>Status</th>
+                <th>EWA Balance</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -222,6 +239,14 @@ function EmployeeList() {
                     <span className={`badge ${employee.isActive ? 'badge-success' : 'badge-danger'}`}>
                       {employee.isActive ? 'Active' : 'Inactive'}
                     </span>
+                  </td>
+                  <td>
+                    {balances[employee.id]
+                      ? balances[employee.id].available
+                        ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>${balances[employee.id].amount.toLocaleString()}</span>
+                        : <span style={{ color: 'var(--text-muted)' }}>$0</span>
+                      : <span style={{ color: 'var(--text-muted)' }}>&mdash;</span>
+                    }
                   </td>
                   <td>
                     <div className="actions-cell">

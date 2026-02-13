@@ -7,7 +7,8 @@ import {
 import {
   getEmployee, getTimeEntries, getTaxInfo, getDeductions,
   clockIn, clockOut, createTaxInfo, updateTaxInfo,
-  createDeduction, updateDeduction, deleteDeduction
+  createDeduction, updateDeduction, deleteDeduction,
+  getEwaBalance
 } from '../api';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -33,6 +34,8 @@ function EmployeeDetail() {
   const [showDeductionModal, setShowDeductionModal] = useState(false);
   const [editingDeduction, setEditingDeduction] = useState(null);
   const [clockedIn, setClockedIn] = useState(false);
+  const [ewaBalance, setEwaBalance] = useState(null);
+  const [ewaError, setEwaError] = useState(null);
 
   const [taxForm, setTaxForm] = useState({
     federalFilingStatus: 'Single',
@@ -57,17 +60,26 @@ function EmployeeDetail() {
 
   const loadAllData = async () => {
     try {
-      const [empRes, timeRes, taxRes, dedRes] = await Promise.all([
+      const [empRes, timeRes, taxRes, dedRes, ewaRes] = await Promise.all([
         getEmployee(id),
         getTimeEntries(id),
         getTaxInfo(id).catch(() => ({ data: null })),
         getDeductions(id),
+        getEwaBalance(id, true).catch((err) => ({ data: null, error: err.response?.data?.message || err.response?.data || 'Unable to calculate EWA balance' })),
       ]);
 
       setEmployee(empRes.data);
       setTimeEntries(timeRes.data);
       setTaxInfo(taxRes.data);
       setDeductions(dedRes.data);
+
+      if (ewaRes.data && !ewaRes.error) {
+        setEwaBalance(ewaRes.data);
+        setEwaError(null);
+      } else {
+        setEwaBalance(null);
+        setEwaError(ewaRes.error || 'Unable to calculate EWA balance');
+      }
 
       // Check if currently clocked in
       const activeEntry = timeRes.data.find(e => !e.clockOut);
@@ -283,6 +295,12 @@ function EmployeeDetail() {
           >
             Deductions
           </button>
+          <button
+            className={`tab ${activeTab === 'ewa' ? 'active' : ''}`}
+            onClick={() => setActiveTab('ewa')}
+          >
+            EWA Balance
+          </button>
         </div>
 
         <div className="tab-content">
@@ -486,6 +504,105 @@ function EmployeeDetail() {
                   </div>
                 )}
               </div>
+            </>
+          )}
+
+          {activeTab === 'ewa' && (
+            <>
+              {ewaBalance ? (
+                <>
+                  <div className="balance-summary">
+                    <div className="balance-card">
+                      <div className="balance-card-label">Gross Balance</div>
+                      <div className="balance-card-value">${ewaBalance.grossBalance?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    </div>
+                    <div className="balance-card">
+                      <div className="balance-card-label">Net Balance</div>
+                      <div className="balance-card-value">${ewaBalance.netBalance?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    </div>
+                    <div className="balance-card highlight">
+                      <div className="balance-card-label">Final Available Balance</div>
+                      <div className="balance-card-value">${ewaBalance.finalBalance?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    </div>
+                  </div>
+
+                  <h4 style={{ marginTop: '24px', marginBottom: '16px', fontSize: '14px', color: '#64748b' }}>Calculation Details</h4>
+                  <div className="info-grid">
+                    <div className="info-item">
+                      <div className="info-label">Access Percentage</div>
+                      <div className="info-value">{ewaBalance.accessPercentage}%</div>
+                    </div>
+                    <div className="info-item">
+                      <div className="info-label">Minimum Threshold</div>
+                      <div className="info-value">${ewaBalance.minimumThreshold?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    </div>
+                    <div className="info-item">
+                      <div className="info-label">Daily Transfer Limit</div>
+                      <div className="info-value">${ewaBalance.dailyTransferLimit?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    </div>
+                    <div className="info-item">
+                      <div className="info-label">Remaining Daily Limit</div>
+                      <div className="info-value">${ewaBalance.remainingDailyLimit?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    </div>
+                    <div className="info-item">
+                      <div className="info-label">Calculation Method</div>
+                      <div className="info-value">{ewaBalance.calculationMethod}</div>
+                    </div>
+                    <div className="info-item">
+                      <div className="info-label">Hours Worked</div>
+                      <div className="info-value">{ewaBalance.hoursWorked}</div>
+                    </div>
+                    <div className="info-item">
+                      <div className="info-label">Pay Rate</div>
+                      <div className="info-value">${ewaBalance.payRate?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    </div>
+                    <div className="info-item">
+                      <div className="info-label">Transfer Eligible</div>
+                      <div className="info-value">
+                        <span className={`badge ${ewaBalance.isTransferEligible ? 'badge-success' : 'badge-danger'}`}>
+                          {ewaBalance.isTransferEligible ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="info-item">
+                      <div className="info-label">Outstanding Advances</div>
+                      <div className="info-value">${ewaBalance.outstandingAdvances?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                    </div>
+                  </div>
+
+                  {ewaBalance.deductions && ewaBalance.deductions.length > 0 && (
+                    <>
+                      <h4 style={{ marginTop: '24px', marginBottom: '16px', fontSize: '14px', color: '#64748b' }}>Deductions Breakdown</h4>
+                      <div className="table-container">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Type</th>
+                              <th>Name</th>
+                              <th>Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ewaBalance.deductions.map((ded, index) => (
+                              <tr key={index}>
+                                <td>{ded.type}</td>
+                                <td>{ded.name}</td>
+                                <td>${ded.amount?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : (
+                <div className="empty-state">
+                  <DollarSign />
+                  <h3>EWA Balance Unavailable</h3>
+                  <p>{typeof ewaError === 'string' ? ewaError : 'Unable to calculate EWA balance for this employee.'}</p>
+                </div>
+              )}
             </>
           )}
         </div>

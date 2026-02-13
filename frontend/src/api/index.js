@@ -26,6 +26,10 @@ export const getTaxInfo = (employeeId) => api.get(`/taxinformation/employee/${em
 export const createTaxInfo = (data) => api.post('/taxinformation', data);
 export const updateTaxInfo = (employeeId, data) => api.put(`/taxinformation/employee/${employeeId}`, data);
 
+// EWA Balance
+export const getEwaBalance = (employeeId, includeBreakdown = false) =>
+  api.get(`/v1/employees/${employeeId}/balance${includeBreakdown ? '?includeBreakdown=true' : ''}`);
+
 // Deductions
 export const getDeductions = (employeeId) => api.get(`/deductions/employee/${employeeId}`);
 export const createDeduction = (data) => api.post('/deductions', data);
