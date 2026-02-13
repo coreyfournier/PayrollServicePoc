@@ -88,7 +88,12 @@ export default function ChatView() {
 
   return (
     <div className="chat-container">
-      <ChatIdentityBar employeeName={employeeName} onNameChange={setEmployeeName} />
+      <ChatIdentityBar employeeName={employeeName} onNameChange={(name) => {
+        setEmployeeName(name);
+        setMessages([WELCOME_MESSAGE]);
+        setConversationHistory([]);
+        setError(null);
+      }} />
 
       <div className="chat-messages">
         {messages.map((msg, i) => (
