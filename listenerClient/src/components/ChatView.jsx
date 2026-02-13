@@ -7,7 +7,7 @@ import ChatIdentityBar from './ChatIdentityBar';
 const WELCOME_MESSAGE = {
   role: 'assistant',
   content:
-    "Hi! I'm your **EWA Assistant**. I can help you check your earnings, deductions, tax info, and time entries.\n\nSelect your name above to get started, then ask me anything!",
+    "Hi! I'm your **Tapcheck Assistant**. I can help you check your earnings, deductions, tax info, and time entries.\n\nSelect your name above to get started, then ask me anything!",
   timestamp: new Date(),
 };
 
