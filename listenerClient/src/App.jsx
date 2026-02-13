@@ -2,6 +2,7 @@ import { Provider as UrqlProvider } from 'urql';
 import { urqlClient } from './graphql/client';
 import EmployeeChangeStream from './components/EmployeeChangeStream';
 import EmployeeList from './components/EmployeeList';
+import ChatView from './components/ChatView';
 import { useState } from 'react';
 
 export default function App() {
@@ -25,10 +26,18 @@ export default function App() {
             >
               Employee Records
             </button>
+            <button
+              className={`nav-btn ${activeView === 'chat' ? 'active' : ''}`}
+              onClick={() => setActiveView('chat')}
+            >
+              EWA Chat
+            </button>
           </nav>
         </header>
         <main>
-          {activeView === 'stream' ? <EmployeeChangeStream /> : <EmployeeList />}
+          {activeView === 'stream' && <EmployeeChangeStream />}
+          {activeView === 'records' && <EmployeeList />}
+          {activeView === 'chat' && <ChatView />}
         </main>
       </div>
     </UrqlProvider>
