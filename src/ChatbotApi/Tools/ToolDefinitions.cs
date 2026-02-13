@@ -68,18 +68,13 @@ public static class ToolDefinitions
             ),
             CreateTool(
                 "get_ewa_balance",
-                "Retrieves the Early Wage Access (EWA) balance for a specific employee. Returns gross balance, net balance, final balance, access percentage, and transfer eligibility. Optionally includes a full breakdown of all deductions applied. May return a 422 INSUFFICIENT_DATA error for employees missing tax information.",
+                "Calculates the Earned Wage Access (EWA) balance and available withdrawal for an employee. Returns: gross earned wages for the current pay period, estimated taxes, estimated deductions, net earned wages (the employee's available balance after taxes and deductions), and the amount available to withdraw today. Withdrawal rules: max 1 withdrawal per day, capped at $200 or 70% of net earned wages (whichever is lower). Always use this tool when a user asks about their balance, available funds, how much they can withdraw, or anything related to earned wage access.",
                 new JsonObject
                 {
                     ["employeeId"] = new JsonObject
                     {
                         ["type"] = "string",
                         ["description"] = "The unique identifier (GUID) of the employee"
-                    },
-                    ["includeBreakdown"] = new JsonObject
-                    {
-                        ["type"] = "boolean",
-                        ["description"] = "Whether to include itemized deduction-level detail in the response. Defaults to false."
                     }
                 },
                 "employeeId"

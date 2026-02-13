@@ -34,6 +34,7 @@ builder.Services.AddHttpClient<IPayrollApiClient, PayrollApiClient>(client =>
 });
 
 // Services
+builder.Services.AddScoped<IEwaBalanceCalculator, EwaBalanceCalculator>();
 builder.Services.AddScoped<ToolExecutor>();
 builder.Services.AddScoped<IChatService, ChatService>();
 

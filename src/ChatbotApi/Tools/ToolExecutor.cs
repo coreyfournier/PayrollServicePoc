@@ -6,11 +6,13 @@ namespace ChatbotApi.Tools;
 public class ToolExecutor
 {
     private readonly IPayrollApiClient _payrollApiClient;
+    private readonly IEwaBalanceCalculator _ewaBalanceCalculator;
     private readonly ILogger<ToolExecutor> _logger;
 
-    public ToolExecutor(IPayrollApiClient payrollApiClient, ILogger<ToolExecutor> logger)
+    public ToolExecutor(IPayrollApiClient payrollApiClient, IEwaBalanceCalculator ewaBalanceCalculator, ILogger<ToolExecutor> logger)
     {
         _payrollApiClient = payrollApiClient;
+        _ewaBalanceCalculator = ewaBalanceCalculator;
         _logger = logger;
     }
 
@@ -32,9 +34,7 @@ public class ToolExecutor
                 "get_time_entries" => await _payrollApiClient.GetTimeEntriesAsync(GetRequiredString(input, "employeeId")),
                 "get_tax_information" => await _payrollApiClient.GetTaxInformationAsync(GetRequiredString(input, "employeeId")),
                 "get_deductions" => await _payrollApiClient.GetDeductionsAsync(GetRequiredString(input, "employeeId")),
-                "get_ewa_balance" => await _payrollApiClient.GetEwaBalanceAsync(
-                    GetRequiredString(input, "employeeId"),
-                    input.TryGetValue("includeBreakdown", out var breakdown) && breakdown.GetBoolean()),
+                "get_ewa_balance" => await _ewaBalanceCalculator.GetEwaBalanceAsync(GetRequiredString(input, "employeeId")),
                 _ => $"{{\"error\": \"Unknown tool: {toolName}\"}}"
             };
         }
