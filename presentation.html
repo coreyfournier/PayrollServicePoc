@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EWA Chatbot — Hackathon Demo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  /* Slide container */
+  .deck { position: relative; width: 100vw; height: 100vh; }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    padding: 60px 100px;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+  .slide.active { display: flex; opacity: 1; }
+
+  /* Typography */
+  h1 { font-size: 56px; font-weight: 800; line-height: 1.1; margin-bottom: 16px; }
+  h2 { font-size: 42px; font-weight: 700; line-height: 1.2; margin-bottom: 24px; }
+  h3 { font-size: 28px; font-weight: 600; margin-bottom: 16px; color: #94a3b8; }
+  p, li { font-size: 22px; line-height: 1.6; color: #cbd5e1; }
+  .subtitle { font-size: 26px; color: #94a3b8; font-weight: 400; margin-bottom: 40px; }
+  .small { font-size: 18px; color: #64748b; }
+
+  /* Accent colors */
+  .accent { color: #3b82f6; }
+  .green { color: #10b981; }
+  .amber { color: #f59e0b; }
+  .red { color: #ef4444; }
+
+  /* Gradient text */
+  .gradient-text {
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6, #ec4899);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Lists */
+  ul { list-style: none; margin: 16px 0; }
+  ul li { padding: 10px 0; padding-left: 32px; position: relative; font-size: 22px; }
+  ul li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 18px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #3b82f6;
+  }
+  ul.green-dots li::before { background: #10b981; }
+  ul.amber-dots li::before { background: #f59e0b; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+  th {
+    text-align: left;
+    padding: 14px 20px;
+    background: #1e293b;
+    color: #94a3b8;
+    font-size: 16px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 2px solid #334155;
+  }
+  td {
+    padding: 14px 20px;
+    border-bottom: 1px solid #1e293b;
+    font-size: 20px;
+    color: #cbd5e1;
+  }
+  tr:hover td { background: rgba(59, 130, 246, 0.05); }
+  td strong { color: #3b82f6; font-weight: 600; }
+  td code {
+    background: #1e293b;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 17px;
+    color: #60a5fa;
+  }
+
+  /* Cards */
+  .card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; margin: 24px 0; }
+  .card-grid.three-col { grid-template-columns: repeat(3, 1fr); }
+  .card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 28px;
+  }
+  .card h4 { font-size: 20px; font-weight: 600; color: #f8fafc; margin-bottom: 8px; }
+  .card p { font-size: 18px; color: #94a3b8; }
+
+  /* Architecture diagram */
+  .arch-flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin: 40px 0;
+    flex-wrap: wrap;
+  }
+  .arch-box {
+    background: #1e293b;
+    border: 2px solid #334155;
+    border-radius: 12px;
+    padding: 20px 28px;
+    text-align: center;
+    min-width: 160px;
+  }
+  .arch-box.highlight { border-color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
+  .arch-box .label { font-size: 16px; font-weight: 700; color: #f8fafc; }
+  .arch-box .sublabel { font-size: 13px; color: #64748b; margin-top: 4px; }
+  .arch-arrow { font-size: 28px; color: #3b82f6; font-weight: 700; }
+
+  /* Speaker notes */
+  .speaker-notes {
+    position: absolute;
+    bottom: 80px;
+    left: 100px;
+    right: 100px;
+    background: rgba(30, 41, 59, 0.9);
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 20px 24px;
+    font-size: 17px;
+    color: #94a3b8;
+    line-height: 1.5;
+    display: none;
+    backdrop-filter: blur(8px);
+  }
+  .speaker-notes.visible { display: block; }
+  .speaker-notes strong { color: #60a5fa; }
+  .notes-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #475569;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  /* Pipeline steps */
+  .pipeline { display: flex; gap: 8px; margin: 24px 0; flex-wrap: wrap; }
+  .pipeline-step {
+    flex: 1;
+    min-width: 160px;
+    background: #1e293b;
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    position: relative;
+    border: 1px solid #334155;
+  }
+  .pipeline-step .step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #3b82f6;
+    color: white;
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 10px;
+  }
+  .pipeline-step .step-title { font-size: 15px; font-weight: 600; color: #f8fafc; margin-bottom: 4px; }
+  .pipeline-step .step-desc { font-size: 13px; color: #64748b; }
+
+  /* Demo box */
+  .demo-box {
+    background: #1e293b;
+    border: 2px solid #3b82f6;
+    border-radius: 12px;
+    padding: 24px 32px;
+    margin: 16px 0;
+  }
+  .demo-box .demo-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #3b82f6;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .demo-box .demo-text {
+    font-size: 22px;
+    color: #f8fafc;
+    font-family: 'Courier New', monospace;
+  }
+
+  /* Big number */
+  .big-number { font-size: 72px; font-weight: 900; line-height: 1; }
+
+  /* Navigation */
+  .nav-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    background: rgba(15, 23, 42, 0.95);
+    border-top: 1px solid #1e293b;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 32px;
+    z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .nav-bar button {
+    padding: 8px 24px;
+    border: 1px solid #334155;
+    background: #1e293b;
+    color: #cbd5e1;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  .nav-bar button:hover { background: #334155; color: #f8fafc; }
+  .nav-bar button:disabled { opacity: 0.3; cursor: not-allowed; }
+  .nav-bar button.primary { background: #3b82f6; border-color: #3b82f6; color: white; }
+  .nav-bar button.primary:hover { background: #2563eb; }
+  .nav-bar .slide-counter {
+    font-size: 14px;
+    color: #64748b;
+    font-weight: 500;
+  }
+  .nav-bar .progress {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+    transition: width 0.4s ease;
+  }
+  .nav-controls { display: flex; gap: 8px; align-items: center; }
+
+  /* Keyboard hint */
+  kbd {
+    display: inline-block;
+    padding: 2px 8px;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: inherit;
+    color: #64748b;
+  }
+
+  /* Two column layout */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: start; }
+
+  /* Takeaway boxes */
+  .takeaway {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    margin: 20px 0;
+    padding: 24px;
+    background: #1e293b;
+    border-radius: 12px;
+    border-left: 4px solid #3b82f6;
+  }
+  .takeaway:nth-child(2) { border-left-color: #10b981; }
+  .takeaway:nth-child(3) { border-left-color: #f59e0b; }
+  .takeaway .num {
+    font-size: 36px;
+    font-weight: 800;
+    color: #3b82f6;
+    min-width: 48px;
+  }
+  .takeaway:nth-child(2) .num { color: #10b981; }
+  .takeaway:nth-child(3) .num { color: #f59e0b; }
+  .takeaway h4 { font-size: 20px; font-weight: 600; color: #f8fafc; margin-bottom: 4px; }
+  .takeaway p { font-size: 17px; color: #94a3b8; margin: 0; }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- SLIDE 1: Title -->
+  <div class="slide active" data-notes="Today we're going to show you an AI-powered Earned Wage Access platform we built during this hackathon. The core idea is simple: employees should be able to ask a chatbot, in plain English, 'How much can I withdraw today?' — and get an instant, accurate answer based on their real payroll data.">
+    <h3>Hackathon Demo</h3>
+    <h1><span class="gradient-text">AI-Powered Earned Wage Access</span></h1>
+    <p class="subtitle">A conversational chatbot that lets employees check their balance, understand their withdrawals, and get instant answers — powered by real payroll data.</p>
+    <div style="display:flex; gap:12px; margin-top: 24px;">
+      <div style="padding:8px 20px; background:#1e293b; border-radius:8px; font-size:15px; color:#64748b;">Claude Sonnet 4.5</div>
+      <div style="padding:8px 20px; background:#1e293b; border-radius:8px; font-size:15px; color:#64748b;">ASP.NET Core</div>
+      <div style="padding:8px 20px; background:#1e293b; border-radius:8px; font-size:15px; color:#64748b;">React 19</div>
+      <div style="padding:8px 20px; background:#1e293b; border-radius:8px; font-size:15px; color:#64748b;">Docker</div>
+    </div>
+  </div>
+
+  <!-- SLIDE 2: The Problem -->
+  <div class="slide" data-notes="Earned Wage Access is a fast-growing benefit where employees can access a portion of wages they've already earned before payday. But there are challenges. Employees don't understand how their balance is calculated. They don't know why the limit is what it is. Support tickets pile up. We asked: what if an AI assistant could explain all of this conversationally?">
+    <h3>The Problem</h3>
+    <h2>EWA is great — but employees have questions</h2>
+    <div class="card-grid">
+      <div class="card">
+        <h4>No transparency</h4>
+        <p>Employees see a number but don't know how it was calculated</p>
+      </div>
+      <div class="card">
+        <h4>Confusing limits</h4>
+        <p>"Why can I only withdraw $175?" — they don't understand the rules</p>
+      </div>
+      <div class="card">
+        <h4>Support overhead</h4>
+        <p>Balance questions become support tickets that humans have to answer</p>
+      </div>
+      <div class="card">
+        <h4>Static interfaces</h4>
+        <p>Traditional apps show a number with no explanation or context</p>
+      </div>
+    </div>
+    <p style="font-size:24px; color:#f8fafc; margin-top:24px;">What if an <span class="accent">AI assistant</span> could explain this conversationally — using the same payroll data your system already has?</p>
+  </div>
+
+  <!-- SLIDE 3: Architecture -->
+  <div class="slide" data-notes="Here's how it works end to end. The Payroll API manages all employee data in MongoDB. The Chatbot API connects Claude to payroll data via tool calling — Claude can query 6 different endpoints. The Chat UI is a React tab inside the Listener Client. And the Event Pipeline keeps downstream systems in sync via Kafka. The key insight: Claude doesn't just retrieve data — it calculates the EWA balance by combining employee info, hours, taxes, and deductions in real time.">
+    <h3>Architecture</h3>
+    <h2>End-to-end data flow</h2>
+    <div class="arch-flow">
+      <div class="arch-box">
+        <div class="label">Employee</div>
+        <div class="sublabel">Types a question</div>
+      </div>
+      <div class="arch-arrow">&#8594;</div>
+      <div class="arch-box highlight">
+        <div class="label">Chat UI</div>
+        <div class="sublabel">React + Markdown</div>
+      </div>
+      <div class="arch-arrow">&#8594;</div>
+      <div class="arch-box highlight">
+        <div class="label">Chatbot API</div>
+        <div class="sublabel">Claude + Tool Calling</div>
+      </div>
+      <div class="arch-arrow">&#8594;</div>
+      <div class="arch-box">
+        <div class="label">Payroll API</div>
+        <div class="sublabel">ASP.NET + MediatR</div>
+      </div>
+      <div class="arch-arrow">&#8594;</div>
+      <div class="arch-box">
+        <div class="label">MongoDB</div>
+        <div class="sublabel">Employee data</div>
+      </div>
+    </div>
+    <div class="card-grid" style="margin-top:32px;">
+      <div class="card">
+        <h4><span class="accent">Claude Tool Calling</span></h4>
+        <p>AI decides which APIs to call based on the question. Chains multiple lookups automatically.</p>
+      </div>
+      <div class="card">
+        <h4><span class="green">Real-time Events</span></h4>
+        <p>Kafka + Dapr pipeline publishes changes. GraphQL subscriptions keep the listener client in sync.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 4: Balance Engine -->
+  <div class="slide" data-notes="Let me walk through the withdrawal logic — this is the business rules engine we built. First we calculate gross earned wages — for salaried employees it's prorated by days into the pay period, for hourly it's hours times rate. Then we subtract estimated taxes and deductions to get net earned. The withdrawal limit is the lesser of $200 or 70% of net. Max one per day. The system always explains WHY the limit is what it is.">
+    <h3>Business Logic</h3>
+    <h2>The EWA Balance Engine</h2>
+    <div class="pipeline">
+      <div class="pipeline-step">
+        <div class="step-num">1</div>
+        <div class="step-title">Gross Earned</div>
+        <div class="step-desc">Hours x rate, or prorated salary</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">2</div>
+        <div class="step-title">Taxes</div>
+        <div class="step-desc">Federal + State + FICA</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">3</div>
+        <div class="step-title">Deductions</div>
+        <div class="step-desc">Health, 401k, dental, etc.</div>
+      </div>
+      <div class="pipeline-step">
+        <div class="step-num">4</div>
+        <div class="step-title">Net Earned</div>
+        <div class="step-desc">Gross &minus; taxes &minus; deductions</div>
+      </div>
+      <div class="pipeline-step" style="border-color:#3b82f6;">
+        <div class="step-num">5</div>
+        <div class="step-title">Withdrawal</div>
+        <div class="step-desc">min($200, 70% of net)</div>
+      </div>
+    </div>
+    <table style="margin-top:24px;">
+      <thead>
+        <tr><th>Employee</th><th>Net Earned</th><th>70% of Net</th><th>Daily Cap</th><th>Available Today</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>John (Salary $75k)</td><td>~$1,800</td><td>$1,260</td><td>$200</td><td><strong>$200</strong> (capped)</td></tr>
+        <tr><td>Sarah (Hourly, 20hrs)</td><td>~$380</td><td>$266</td><td>$200</td><td><strong>$200</strong> (capped)</td></tr>
+        <tr><td>New hire, 2 days in</td><td>~$100</td><td>$70</td><td>$200</td><td><strong>$70</strong> (70% rule)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- SLIDE 5: Live Demo -->
+  <div class="slide" data-notes="Let's switch to the live demo. Open localhost:3001 and click the EWA Chat tab. First show the interface — the employee selector, quick-action chips, and clean design. Then select John and type: 'What data do you have on me?' Point out the markdown formatting. Next ask: 'How much can I withdraw today?' — highlight the gross, taxes, deductions, net balance vs. withdrawal limit. Then ask: 'Why can't I withdraw more?' to show conversational follow-ups. Optionally switch to Sarah to show hourly calculation.">
+    <h3>Live Demo</h3>
+    <h2>Let's see it in action</h2>
+    <p style="font-size:22px; margin-bottom:32px;">Open <span class="accent" style="font-family:'Courier New',monospace;">http://localhost:3001</span> &rarr; click <strong>EWA Chat</strong> tab</p>
+    <div class="demo-box">
+      <div class="demo-label">Step 1 — Basic Query</div>
+      <div class="demo-text">"What data do you have on me?"</div>
+    </div>
+    <div class="demo-box">
+      <div class="demo-label">Step 2 — Balance &amp; Withdrawal</div>
+      <div class="demo-text">"How much can I withdraw today?"</div>
+    </div>
+    <div class="demo-box">
+      <div class="demo-label">Step 3 — Follow-up</div>
+      <div class="demo-text">"Why can't I withdraw more?"</div>
+    </div>
+    <p class="small" style="margin-top:20px;">Select <strong>John</strong> (salaried) first, then optionally switch to <strong>Sarah</strong> (hourly) to show different calculations.</p>
+  </div>
+
+  <!-- SLIDE 6: Claude's Tools -->
+  <div class="slide" data-notes="The chatbot has 6 tools available — all read-only. Claude decides which to call based on the question. It can chain multiple calls — first look up by name, then fetch balance by ID. Up to 10 tool round-trips per conversation. And it's explicitly read-only — if you ask it to change tax withholdings, it politely declines.">
+    <h3>Under the Hood</h3>
+    <h2>What Claude can do</h2>
+    <div class="two-col">
+      <div>
+        <table>
+          <thead><tr><th>Tool</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>get_all_employees</code></td><td>Find by name</td></tr>
+            <tr><td><code>get_employee_by_id</code></td><td>Full profile</td></tr>
+            <tr><td><code>get_time_entries</code></td><td>Clock in/out</td></tr>
+            <tr><td><code>get_tax_information</code></td><td>Withholding</td></tr>
+            <tr><td><code>get_deductions</code></td><td>Benefits</td></tr>
+            <tr><td><code>get_ewa_balance</code></td><td><strong>Balance + limit</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px;">
+          <h4><span class="accent">Automatic chaining</span></h4>
+          <p>Claude chains tools: name lookup &#8594; ID &#8594; balance. Up to 10 round-trips per conversation.</p>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h4><span class="green">Read-only by design</span></h4>
+          <p>"Change my tax withholding" &#8594; politely declines. No write operations available.</p>
+        </div>
+        <div class="card">
+          <h4><span class="amber">Context-aware</span></h4>
+          <p>Conversation history maintained across turns. Follow-ups work naturally.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SLIDE 7: Tech Stack -->
+  <div class="slide" data-notes="Quick rundown of the tech stack. Everything runs locally in Docker — one docker-compose up and you have 12 services running. Claude Sonnet 4.5 for AI, ASP.NET Core for the backend, React 19 for the frontend, MongoDB and MySQL for write and read models, Kafka and Dapr for event streaming.">
+    <h3>Tech Stack</h3>
+    <h2>What powers this</h2>
+    <div class="card-grid three-col">
+      <div class="card">
+        <h4>AI</h4>
+        <p>Claude Sonnet 4.5<br>Anthropic SDK<br>Tool calling</p>
+      </div>
+      <div class="card">
+        <h4>Chat Backend</h4>
+        <p>ASP.NET Core 7<br>EWA Calculator<br>6 tool endpoints</p>
+      </div>
+      <div class="card">
+        <h4>Payroll API</h4>
+        <p>ASP.NET Core<br>MediatR + Orleans<br>DDD architecture</p>
+      </div>
+      <div class="card">
+        <h4>Databases</h4>
+        <p>MongoDB (write)<br>MySQL (read model)<br>CQRS pattern</p>
+      </div>
+      <div class="card">
+        <h4>Messaging</h4>
+        <p>Apache Kafka<br>Dapr sidecars<br>4 event topics</p>
+      </div>
+      <div class="card">
+        <h4>Frontend</h4>
+        <p>React 19 + Vite<br>react-markdown<br>URQL + GraphQL</p>
+      </div>
+    </div>
+    <p style="margin-top:24px; font-size:22px; text-align:center;">One <code style="background:#1e293b; padding:4px 12px; border-radius:6px; color:#60a5fa;">docker-compose up</code> &rarr; 12 services running</p>
+  </div>
+
+  <!-- SLIDE 8: V2 Roadmap -->
+  <div class="slide" data-notes="For V2, we'd add: real authentication with SSO instead of a name dropdown, actual withdrawal execution to process the transfer, push notifications when balances change via GraphQL subscriptions, conversation persistence across sessions, multi-language support which Claude handles natively, and audit logging for compliance.">
+    <h3>What's Next</h3>
+    <h2>V2 Roadmap</h2>
+    <ul class="green-dots">
+      <li><strong>Real authentication</strong> — SSO integration instead of a name dropdown</li>
+      <li><strong>Withdrawal execution</strong> — actually process the EWA transfer, not just calculate</li>
+      <li><strong>Push notifications</strong> — "Your balance just increased" via GraphQL subscriptions</li>
+      <li><strong>Conversation persistence</strong> — save chat history across sessions</li>
+      <li><strong>Multi-language support</strong> — Claude handles this natively</li>
+      <li><strong>Audit logging</strong> — every balance inquiry logged for compliance</li>
+    </ul>
+  </div>
+
+  <!-- SLIDE 9: Takeaways -->
+  <div class="slide" data-notes="Three things to take away. First: AI plus payroll data equals self-service support — employees get instant answers instead of filing tickets. Second: tool calling is the pattern — Claude doesn't hallucinate numbers, it calls real APIs and calculates from real data. Third: we built this in a hackathon — chat UI, balance engine, withdrawal rules, full Docker deployment, all wired into the existing event-driven architecture. Questions?">
+    <h3>Key Takeaways</h3>
+    <h2>Why this matters</h2>
+    <div class="takeaway">
+      <div class="num">1</div>
+      <div>
+        <h4>AI + payroll data = self-service support</h4>
+        <p>Employees get instant answers instead of filing tickets. Reduces support load, improves experience.</p>
+      </div>
+    </div>
+    <div class="takeaway">
+      <div class="num">2</div>
+      <div>
+        <h4>Tool calling is the pattern</h4>
+        <p>Claude doesn't hallucinate numbers — it calls real APIs and calculates from real data. Trustworthy results.</p>
+      </div>
+    </div>
+    <div class="takeaway">
+      <div class="num">3</div>
+      <div>
+        <h4>We built this in a hackathon</h4>
+        <p>Chat UI, balance engine, withdrawal rules, full Docker deployment — all wired into the existing event-driven architecture.</p>
+      </div>
+    </div>
+    <p style="font-size:28px; text-align:center; margin-top:40px; color:#f8fafc; font-weight:600;">Questions?</p>
+  </div>
+
+</div>
+
+<!-- Speaker Notes Overlay -->
+<div class="speaker-notes" id="speakerNotes">
+  <span class="notes-label">Speaker Notes</span>
+  <div id="notesContent"></div>
+</div>
+
+<!-- Navigation Bar -->
+<div class="nav-bar">
+  <div class="progress" id="progress"></div>
+  <div class="nav-controls">
+    <button id="prevBtn" disabled>&larr; Previous</button>
+    <button id="nextBtn" class="primary">Next &rarr;</button>
+  </div>
+  <div class="slide-counter">
+    <span id="currentSlide">1</span> / <span id="totalSlides">9</span>
+    &nbsp;&nbsp;
+    <button id="notesToggle" style="font-size:12px; padding:4px 12px;">Notes: OFF</button>
+    &nbsp;
+    <kbd>&larr;</kbd> <kbd>&rarr;</kbd> <kbd>N</kbd>
+  </div>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const currentSlideEl = document.getElementById('currentSlide');
+  const totalSlidesEl = document.getElementById('totalSlides');
+  const progress = document.getElementById('progress');
+  const speakerNotes = document.getElementById('speakerNotes');
+  const notesContent = document.getElementById('notesContent');
+  const notesToggle = document.getElementById('notesToggle');
+
+  let current = 0;
+  let showNotes = false;
+  totalSlidesEl.textContent = slides.length;
+
+  function goTo(index) {
+    if (index < 0 || index >= slides.length) return;
+    slides[current].classList.remove('active');
+    current = index;
+    slides[current].classList.add('active');
+    currentSlideEl.textContent = current + 1;
+    prevBtn.disabled = current === 0;
+    nextBtn.disabled = current === slides.length - 1;
+    nextBtn.textContent = current === slides.length - 1 ? 'End' : 'Next \u2192';
+    progress.style.width = ((current + 1) / slides.length * 100) + '%';
+    updateNotes();
+  }
+
+  function updateNotes() {
+    const notes = slides[current].getAttribute('data-notes');
+    notesContent.textContent = notes || 'No notes for this slide.';
+  }
+
+  prevBtn.addEventListener('click', () => goTo(current - 1));
+  nextBtn.addEventListener('click', () => goTo(current + 1));
+
+  notesToggle.addEventListener('click', () => {
+    showNotes = !showNotes;
+    speakerNotes.classList.toggle('visible', showNotes);
+    notesToggle.textContent = showNotes ? 'Notes: ON' : 'Notes: OFF';
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') {
+      e.preventDefault();
+      goTo(current + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      goTo(current - 1);
+    } else if (e.key === 'n' || e.key === 'N') {
+      notesToggle.click();
+    }
+  });
+
+  goTo(0);
+</script>
+
+</body>
+</html>
