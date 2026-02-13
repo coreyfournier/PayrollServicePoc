@@ -1,4 +1,6 @@
 using PayrollService.Application.Commands.Employee;
+using PayrollService.Application.Configuration;
+using PayrollService.Application.Services;
 using PayrollService.Infrastructure;
 using PayrollService.Infrastructure.Persistence;
 using PayrollService.Infrastructure.Seeding;
@@ -29,6 +31,10 @@ builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(Creat
 
 // Add Dapr client
 builder.Services.AddDaprClient();
+
+// Add EWA configuration and services
+builder.Services.Configure<EwaSettings>(builder.Configuration.GetSection(EwaSettings.SectionName));
+builder.Services.AddScoped<EwaCalculationService>();
 
 // Add Infrastructure services
 var mongoConnectionString = builder.Configuration.GetValue<string>("MongoDB:ConnectionString") ?? "mongodb://localhost:27017";
