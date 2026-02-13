@@ -65,6 +65,24 @@ public static class ToolDefinitions
                     }
                 },
                 "employeeId"
+            ),
+            CreateTool(
+                "get_ewa_balance",
+                "Retrieves the Early Wage Access (EWA) balance for a specific employee. Returns gross balance, net balance, final balance, access percentage, and transfer eligibility. Optionally includes a full breakdown of all deductions applied. May return a 422 INSUFFICIENT_DATA error for employees missing tax information.",
+                new JsonObject
+                {
+                    ["employeeId"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "The unique identifier (GUID) of the employee"
+                    },
+                    ["includeBreakdown"] = new JsonObject
+                    {
+                        ["type"] = "boolean",
+                        ["description"] = "Whether to include itemized deduction-level detail in the response. Defaults to false."
+                    }
+                },
+                "employeeId"
             )
         };
     }

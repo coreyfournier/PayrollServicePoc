@@ -36,6 +36,11 @@ public class PayrollApiClient : IPayrollApiClient
         return await GetAsync($"/api/deductions/employee/{employeeId}");
     }
 
+    public async Task<string> GetEwaBalanceAsync(string employeeId, bool includeBreakdown = false)
+    {
+        return await GetAsync($"/api/v1/employees/{employeeId}/balance?includeBreakdown={includeBreakdown}");
+    }
+
     private async Task<string> GetAsync(string path)
     {
         _logger.LogDebug("Calling Payroll API: GET {Path}", path);

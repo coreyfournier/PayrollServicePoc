@@ -7,4 +7,5 @@ public interface IPayrollApiClient
     Task<string> GetTimeEntriesAsync(string employeeId);
     Task<string> GetTaxInformationAsync(string employeeId);
     Task<string> GetDeductionsAsync(string employeeId);
+    Task<string> GetEwaBalanceAsync(string employeeId, bool includeBreakdown = false);
 }

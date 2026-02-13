@@ -32,6 +32,9 @@ public class ToolExecutor
                 "get_time_entries" => await _payrollApiClient.GetTimeEntriesAsync(GetRequiredString(input, "employeeId")),
                 "get_tax_information" => await _payrollApiClient.GetTaxInformationAsync(GetRequiredString(input, "employeeId")),
                 "get_deductions" => await _payrollApiClient.GetDeductionsAsync(GetRequiredString(input, "employeeId")),
+                "get_ewa_balance" => await _payrollApiClient.GetEwaBalanceAsync(
+                    GetRequiredString(input, "employeeId"),
+                    input.TryGetValue("includeBreakdown", out var breakdown) && breakdown.GetBoolean()),
                 _ => $"{{\"error\": \"Unknown tool: {toolName}\"}}"
             };
         }
