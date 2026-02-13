@@ -270,10 +270,11 @@ services:
     container_name: chatbot-api
     ports:
       - "5002:80"
+    env_file:
+      - .env
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:80
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PayrollApi__BaseUrl=http://payroll-api:80
     depends_on:
       payroll-api:
