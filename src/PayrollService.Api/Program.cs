@@ -17,7 +17,15 @@ builder.Services.AddCors(options =>
 });
 
 // Add services to the container
-builder.Services.AddControllers().AddDapr();
+// Dapr outbox publishes CloudEvents with datacontenttype=text/plain (Dapr bug),
+// so the JSON formatter must also accept text/plain to avoid HTTP 415.
+builder.Services.AddControllers(options =>
+{
+    var jsonFormatter = options.InputFormatters
+        .OfType<Microsoft.AspNetCore.Mvc.Formatters.SystemTextJsonInputFormatter>()
+        .First();
+    jsonFormatter.SupportedMediaTypes.Add("text/plain");
+}).AddDapr();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {

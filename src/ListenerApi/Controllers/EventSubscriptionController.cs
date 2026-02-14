@@ -23,8 +23,9 @@ public class EventSubscriptionController : ControllerBase
     [HttpPost("employee-events")]
     public async Task<IActionResult> HandleEmployeeEvent([FromBody] EmployeeEventPayload eventData)
     {
-        _logger.LogInformation("Received employee event: {EventType} {EventId}",
-            eventData.EventType, eventData.EventId);
+        var (employeeId, eventId, eventType, _) = eventData.ResolveEventInfo();
+        _logger.LogInformation("Received employee event: {EventType} {EventId} for {EmployeeId}",
+            eventType, eventId, employeeId);
 
         try
         {
@@ -33,7 +34,7 @@ public class EventSubscriptionController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing employee event {EventId}", eventData.EventId);
+            _logger.LogError(ex, "Error processing employee event {EventId}", eventId);
             return StatusCode(500, "Error processing event");
         }
     }
