@@ -147,3 +147,9 @@ DaprPoc/
 ```bash
 docker-compose down -v
 ```
+
+5. **Connect to MongoDB with Compass**:
+   ```
+   mongodb://localhost:27017/?directConnection=true
+   ```
+   The `directConnection=true` parameter is required because the MongoDB container runs as a replica set with the Docker hostname `mongodb`. Without it, Compass attempts to resolve the replica set member hostname and fails with `getaddrinfo ENOTFOUND`.
