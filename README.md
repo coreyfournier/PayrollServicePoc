@@ -40,13 +40,33 @@ This project follows Domain Driven Design (DDD) principles with the following la
 3. **View distributed traces**:
    - Zipkin: http://localhost:9411
 
+## Listener API & Listener Client
+
+The **Listener API** (`src/ListenerApi`) is a .NET 7.0 GraphQL server (HotChocolate) backed by MySQL. It subscribes to the `employee-events` Kafka topic via Dapr and persists employee records to its own database, demonstrating an event-driven read model. Events are processed idempotently using timestamp comparison. It exposes:
+
+- **GraphQL queries** — fetch employee records from MySQL
+- **GraphQL mutations** — manage records (e.g., delete all)
+- **GraphQL subscriptions** — real-time WebSocket notifications when employee data changes
+
+The **Listener Client** (`listenerClient/`) is a React + Vite frontend that connects to the Listener API using [urql](https://github.com/urql-graphql/urql) and `graphql-ws`. It provides two views:
+
+- **Change Stream** — a live feed of employee changes pushed via GraphQL WebSocket subscriptions in real time
+- **Employee Records** — a queryable list of all employee records stored in the Listener API's MySQL database
+
+Together, they demonstrate an end-to-end event-driven pipeline: REST API mutation → domain event → Kafka → Dapr subscription → MySQL projection → GraphQL subscription → real-time UI update.
+
 ## Services
 
 | Service | Port | Description |
 |---------|------|-------------|
 | payroll-api | 5000 | Payroll API Service |
+| listener-api | 5001 | GraphQL Listener API |
+| frontend | 3000 | React frontend (REST client) |
+| listener-client | 3001 | React frontend (GraphQL subscription client) |
 | mongodb | 27017 | MongoDB Database |
+| mysql | 3306 | MySQL Database (Listener API) |
 | kafka | 9092/29092 | Kafka Message Broker |
+| kafka-ui | 8080 | Kafka monitoring UI |
 | zookeeper | 2181 | Zookeeper (Kafka dependency) |
 | zipkin | 9411 | Distributed Tracing |
 
