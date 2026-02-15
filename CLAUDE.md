@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Employee payroll system POC demonstrating Dapr with Kafka pub/sub, MongoDB state store, and the transactional outbox pattern. Two independent frontends consume the API: a REST+React app and a GraphQL+WebSocket subscription client.
+Employee payroll system POC demonstrating Dapr with Kafka pub/sub, MongoDB state store, the transactional outbox pattern, and ksqlDB stream processing for real-time pay period aggregation. Two independent frontends consume the API: a REST+React app and a GraphQL+WebSocket subscription client.
 
 ## Common Commands
 
@@ -91,7 +91,8 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 | frontend | 3000 | REST client |
 | listener-client | 3001 | GraphQL client |
 | kafka | 9092 (internal), 29092 (host) | |
-| kafka-ui | 8080 | |
+| kafka-ui | 8080 | Also has ksqlDB query UI |
+| ksqldb-server | 8088 | REST API |
 | mongodb | 27017 | Replica set, connect with `?directConnection=true` |
 | mysql | 3306 | |
 | zipkin | 9411 | Distributed tracing |
@@ -103,7 +104,39 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 
 ### Kafka Topics
 
-`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events` — created by `kafka-init` container.
+`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`) are managed by ksqlDB.
+
+### ksqlDB Stream Processing
+
+ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-pay-period hour aggregates on the `payperiod-hours-changed` topic. Defined in `ksqldb/statements.sql`, executed by the `ksqldb-init` container on startup.
+
+**Pipeline (3 objects):**
+
+```
+employee-events topic
+  → EMPLOYEE_EVENTS_RAW stream (raw CloudEvent envelope, data as VARCHAR)
+  → TIME_ENTRY_EVENTS stream (filtered for timeentry.clockedout / timeentry.updated)
+  → PAY_PERIOD_HOURS table (aggregated per employee + pay period → payperiod-hours-changed topic)
+```
+
+**Key design decisions:**
+
+- **`data` is VARCHAR, not STRUCT** — Dapr's outbox stringifies the JSON payload (known issue #8130). Fields are extracted via `EXTRACTJSONFIELD(data, '$.FieldName')` with PascalCase entity field names (`$.Id`, `$.EmployeeId`, `$.ClockIn`, `$.ClockOut`, `$.HoursWorked`).
+- **Event type filtering** — The top-level CloudEvent `type` is always `com.dapr.event.sent`. The actual event type is extracted from `$.DomainEvents[0].EventType` inside the stringified data.
+- **Edit-safe aggregation** — `AS_MAP(COLLECT_LIST(TIME_ENTRY_ID), COLLECT_LIST(HOURS_WORKED))` deduplicates by time entry ID (last value wins for duplicate keys), then `REDUCE(MAP_VALUES(...))` sums the latest hours per entry. This prevents double-counting when time entries are edited.
+- **Pay period math** — Bi-weekly periods starting from epoch 2024-01-01T00:00:00Z (1704067200000 ms), each 14 days (1209600000 ms).
+
+**`payperiod-hours-changed` topic schema:**
+
+- Key (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55}`
+- Value (JSON): `{"TOTAL_HOURS_WORKED": 12.0, "EVENT_COUNT": 4, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00"}`
+
+**Init container behavior:** The `ksqldb-init` container terminates all running queries before executing DROP/CREATE statements, making it safe for re-deploys.
+
+**Querying ksqlDB:**
+- Kafka UI at http://localhost:8080 (KSQL DB tab in sidebar)
+- CLI: `docker exec -it ksqldb-server ksql http://localhost:8088`
+- REST: `curl http://localhost:8088/ksql -H 'Content-Type: application/vnd.ksql.v1+json' -d '{"ksql": "SHOW TABLES;"}'`
 
 ### MongoDB
 
@@ -117,7 +150,9 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 - `src/PayrollService.Domain/Common/Entity.cs` — base entity with domain event collection
 - `src/ListenerApi/Program.cs` — GraphQL schema, Dapr subscription, migration runner
 - `dapr/components/statestore-mongodb.yaml` — outbox configuration (critical for event publishing)
+- `ksqldb/statements.sql` — ksqlDB stream/table definitions for pay period aggregation
 
-## Known Issue
+## Known Issues
 
-Dapr's transactional outbox does not preserve the data payload as a JSON object — it gets stringified. Tracked at https://github.com/dapr/dapr/issues/8130.
+- Dapr's transactional outbox does not preserve the data payload as a JSON object — it gets stringified. Tracked at https://github.com/dapr/dapr/issues/8130. The ksqlDB pipeline works around this by declaring `data` as VARCHAR and using `EXTRACTJSONFIELD`.
+- The `COLLECT_LIST` in the ksqlDB aggregation grows unboundedly (appends every event). Acceptable for a POC but would need a retention strategy in production.
