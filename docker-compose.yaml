@@ -307,6 +307,9 @@ services:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:80
       - ConnectionStrings__DefaultConnection=Server=mysql;Database=listener_db;User=listener_user;Password=listener_password;
+      # Dapr sidecar endpoint configuration
+      - DAPR_HTTP_ENDPOINT=http://listener-api-dapr:3501
+      - DAPR_GRPC_ENDPOINT=http://listener-api-dapr:50002
     depends_on:
       mysql:
         condition: service_healthy
@@ -323,12 +326,13 @@ services:
 
   # Dapr sidecar for ListenerApi
   listener-api-dapr:
-    image: "daprio/daprd:1.13.0"
+    image: "daprio/daprd:1.16.0"
     container_name: listener-api-dapr
     command: [
       "./daprd",
       "-app-id", "listener-api",
       "-app-port", "80",
+      "-app-channel-address", "listener-api",
       "-dapr-http-port", "3501",
       "-dapr-grpc-port", "50002",
       "-resources-path", "/components",
@@ -342,7 +346,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    network_mode: "service:listener-api"
+    networks:
+      - payroll-network
     restart: on-failure
 
   # ListenerClient Frontend

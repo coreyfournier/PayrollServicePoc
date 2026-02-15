@@ -42,12 +42,12 @@ for id in $ids; do
   api_delete "$API/employees/$id"
 done
 
-# Clear the ListenerApi MySQL read model
-log "  Clearing ListenerApi read model..."
-curl -sf -X POST "$LISTENER/graphql" \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"mutation { deleteAllEmployees { deletedCount success message } }"}' \
-  > /dev/null || log "  (ListenerApi cleanup returned non-zero — may be empty already)"
+# NOTE: We intentionally do NOT clear the ListenerApi MySQL read model here.
+# Clearing it wipes idempotency markers (LastEventTimestamp), causing Kafka
+# event replay to re-create ghost records. The listener will naturally process
+# the delete events (marking old records inactive) and create events (adding
+# the new active employees). For a truly clean listener, run:
+#   docker-compose down -v && docker-compose up -d
 
 log "Clean slate complete."
 
