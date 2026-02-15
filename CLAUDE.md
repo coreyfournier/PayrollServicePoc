@@ -104,19 +104,21 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 
 ### Kafka Topics
 
-`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`) are managed by ksqlDB.
+`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`) are managed by ksqlDB.
 
 ### ksqlDB Stream Processing
 
 ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-pay-period hour aggregates on the `payperiod-hours-changed` topic. Defined in `ksqldb/statements.sql`, executed by the `ksqldb-init` container on startup.
 
-**Pipeline (3 objects):**
+**Pipeline (5 objects):**
 
 ```
 employee-events topic
   → EMPLOYEE_EVENTS_RAW stream (raw CloudEvent envelope, data as VARCHAR)
-  → TIME_ENTRY_EVENTS stream (filtered for timeentry.clockedout / timeentry.updated)
-  → PAY_PERIOD_HOURS table (aggregated per employee + pay period → payperiod-hours-changed topic)
+  ├→ TIME_ENTRY_EVENTS stream (filtered for timeentry.clockedout / timeentry.updated)
+  │   → PAY_PERIOD_HOURS table (aggregated per employee + pay period → payperiod-hours-changed topic)
+  └→ GROSS_PAY_EVENTS stream (employee + timeentry events, normalized fields)
+      → EMPLOYEE_GROSS_PAY table (rate × hours per employee + pay period → employee-gross-pay topic)
 ```
 
 **Key design decisions:**
@@ -130,6 +132,18 @@ employee-events topic
 
 - Key (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55}`
 - Value (JSON): `{"TOTAL_HOURS_WORKED": 12.0, "EVENT_COUNT": 4, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00"}`
+
+**`employee-gross-pay` topic schema:**
+
+- Key (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55}`
+- Value (JSON): `{"PAY_RATE": 28.5, "PAY_TYPE": "1", "EFFECTIVE_HOURLY_RATE": 28.5, "TOTAL_HOURS_WORKED": 12.0, "GROSS_PAY": 342.0, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00", "EVENT_COUNT": 5}`
+
+**Gross pay design decisions:**
+
+- **Single-stream approach** — Both employee events (with `PayRate`) and time entry events (with `HoursWorked`) flow through the same `employee-events` topic. `GROSS_PAY_EVENTS` captures both, normalizing `EMPLOYEE_ID` via `COALESCE($.EmployeeId, $.Id)`.
+- **Pay rate tracking** — `LATEST_BY_OFFSET(PAY_RATE, true)` ignores nulls from time entry events, keeping the most recent rate from employee events. The `__PAY_RATE__` sentinel for `TIME_ENTRY_ID` contributes 0 hours to the AS_MAP dedup.
+- **Salary vs Hourly** — `PayType=1` (Hourly): rate is $/hour. `PayType=2` (Salary): rate is $/year, divided by 2080 (52 weeks × 40 hours) to get the effective hourly rate.
+- **Current period only** — Pay rate changes are assigned to the current pay period (via `$.UpdatedAt`), so only that period's `GROSS_PAY` updates. Past periods retain their existing values.
 
 **Init container behavior:** The `ksqldb-init` container terminates all running queries before executing DROP/CREATE statements, making it safe for re-deploys.
 

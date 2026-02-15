@@ -19,6 +19,8 @@
 -- ============================================================
 
 -- Current / new objects
+DROP TABLE IF EXISTS EMPLOYEE_GROSS_PAY DELETE TOPIC;
+DROP STREAM IF EXISTS GROSS_PAY_EVENTS DELETE TOPIC;
 DROP TABLE IF EXISTS PAY_PERIOD_HOURS DELETE TOPIC;
 DROP STREAM IF EXISTS TIME_ENTRY_EVENTS DELETE TOPIC;
 
@@ -110,5 +112,114 @@ CREATE TABLE PAY_PERIOD_HOURS WITH (
       'yyyy-MM-dd''T''HH:mm:ss'
     ) AS PAY_PERIOD_END
   FROM TIME_ENTRY_EVENTS
+  GROUP BY EMPLOYEE_ID, PAY_PERIOD_NUMBER
+  EMIT CHANGES;
+
+-- ============================================================
+-- Filtered stream for gross pay calculation
+-- Captures BOTH employee events (pay rate changes) and time entry events
+-- (hours worked) from the single employee-events topic.
+-- Employee ID is normalized: TimeEntry has $.EmployeeId, Employee uses $.Id.
+-- TIME_ENTRY_ID uses sentinel '__PAY_RATE__' for employee events so the
+-- AS_MAP dedup in the downstream table treats rate changes as a 0-hour entry.
+-- Pay period is derived from $.ClockIn (timeentry) or $.UpdatedAt (employee).
+-- ============================================================
+CREATE STREAM GROSS_PAY_EVENTS AS
+  SELECT
+    COALESCE(
+      EXTRACTJSONFIELD(data, '$.EmployeeId'),
+      EXTRACTJSONFIELD(data, '$.Id')
+    ) AS EMPLOYEE_ID,
+    CASE
+      WHEN EXTRACTJSONFIELD(data, '$.DomainEvents[0].EventType') LIKE 'timeentry.%'
+        THEN EXTRACTJSONFIELD(data, '$.Id')
+      ELSE '__PAY_RATE__'
+    END AS TIME_ENTRY_ID,
+    COALESCE(CAST(EXTRACTJSONFIELD(data, '$.HoursWorked') AS DOUBLE), CAST(0.0 AS DOUBLE)) AS HOURS_WORKED,
+    CAST(EXTRACTJSONFIELD(data, '$.PayRate') AS DOUBLE) AS PAY_RATE,
+    EXTRACTJSONFIELD(data, '$.PayType') AS PAY_TYPE,
+    CAST(
+      FLOOR(
+        (UNIX_TIMESTAMP(PARSE_TIMESTAMP(
+          SUBSTRING(
+            COALESCE(
+              EXTRACTJSONFIELD(data, '$.ClockIn'),
+              EXTRACTJSONFIELD(data, '$.UpdatedAt')
+            ), 1, 19),
+          'yyyy-MM-dd''T''HH:mm:ss'
+        )) - 1704067200000) / 1209600000
+      ) AS BIGINT
+    ) AS PAY_PERIOD_NUMBER
+  FROM EMPLOYEE_EVENTS_RAW
+  WHERE EXTRACTJSONFIELD(data, '$.DomainEvents[0].EventType') = 'employee.created'
+     OR EXTRACTJSONFIELD(data, '$.DomainEvents[0].EventType') = 'employee.updated'
+     OR EXTRACTJSONFIELD(data, '$.DomainEvents[0].EventType') = 'timeentry.clockedout'
+     OR EXTRACTJSONFIELD(data, '$.DomainEvents[0].EventType') = 'timeentry.updated'
+  EMIT CHANGES;
+
+-- ============================================================
+-- Materialized table: employee gross pay per pay period
+-- Writes every aggregation change to the employee-gross-pay Kafka topic
+--
+-- PAY_RATE / PAY_TYPE: LATEST_BY_OFFSET(col, true) ignores nulls, so
+-- timeentry events (which have null pay rate) don't overwrite the rate.
+-- TOTAL_HOURS_WORKED: same AS_MAP + COLLECT_LIST + REDUCE dedup pattern
+-- as PAY_PERIOD_HOURS — the '__PAY_RATE__' sentinel contributes 0 hours.
+-- EFFECTIVE_HOURLY_RATE: for Salary (PayType=2), divides annual rate by
+-- 2080 hours (52 weeks × 40 hrs). For Hourly (PayType=1), rate is $/hour.
+-- GROSS_PAY: EFFECTIVE_HOURLY_RATE × TOTAL_HOURS_WORKED
+-- ============================================================
+CREATE TABLE EMPLOYEE_GROSS_PAY WITH (
+  KAFKA_TOPIC='employee-gross-pay',
+  KEY_FORMAT='JSON',
+  VALUE_FORMAT='JSON',
+  PARTITIONS=3
+) AS
+  SELECT
+    EMPLOYEE_ID,
+    PAY_PERIOD_NUMBER,
+    LATEST_BY_OFFSET(PAY_RATE, true) AS PAY_RATE,
+    LATEST_BY_OFFSET(PAY_TYPE, true) AS PAY_TYPE,
+    REDUCE(
+      MAP_VALUES(
+        AS_MAP(
+          COLLECT_LIST(TIME_ENTRY_ID),
+          COLLECT_LIST(HOURS_WORKED)
+        )
+      ),
+      CAST(0.0 AS DOUBLE),
+      (s, x) => s + x
+    ) AS TOTAL_HOURS_WORKED,
+    CASE
+      WHEN LATEST_BY_OFFSET(PAY_TYPE, true) = '2'
+        THEN LATEST_BY_OFFSET(PAY_RATE, true) / 2080.0
+      ELSE LATEST_BY_OFFSET(PAY_RATE, true)
+    END AS EFFECTIVE_HOURLY_RATE,
+    CASE
+      WHEN LATEST_BY_OFFSET(PAY_TYPE, true) = '2'
+        THEN LATEST_BY_OFFSET(PAY_RATE, true) / 2080.0
+      ELSE LATEST_BY_OFFSET(PAY_RATE, true)
+    END
+    *
+    REDUCE(
+      MAP_VALUES(
+        AS_MAP(
+          COLLECT_LIST(TIME_ENTRY_ID),
+          COLLECT_LIST(HOURS_WORKED)
+        )
+      ),
+      CAST(0.0 AS DOUBLE),
+      (s, x) => s + x
+    ) AS GROSS_PAY,
+    FORMAT_TIMESTAMP(
+      FROM_UNIXTIME(1704067200000 + (PAY_PERIOD_NUMBER * 1209600000)),
+      'yyyy-MM-dd''T''HH:mm:ss'
+    ) AS PAY_PERIOD_START,
+    FORMAT_TIMESTAMP(
+      FROM_UNIXTIME(1704067200000 + ((PAY_PERIOD_NUMBER + 1) * 1209600000)),
+      'yyyy-MM-dd''T''HH:mm:ss'
+    ) AS PAY_PERIOD_END,
+    COUNT(*) AS EVENT_COUNT
+  FROM GROSS_PAY_EVENTS
   GROUP BY EMPLOYEE_ID, PAY_PERIOD_NUMBER
   EMIT CHANGES;
