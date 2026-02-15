@@ -359,6 +359,21 @@ services:
     networks:
       - payroll-network
 
+  # Seed script — run with: docker-compose up seed
+  seed:
+    image: alpine/curl:latest
+    container_name: seed
+    depends_on:
+      payroll-api:
+        condition: service_healthy
+      listener-api:
+        condition: service_healthy
+    volumes:
+      - ./scripts/seed.sh:/seed.sh
+    entrypoint: ["sh", "/seed.sh"]
+    networks:
+      - payroll-network
+
 networks:
   payroll-network:
     driver: bridge

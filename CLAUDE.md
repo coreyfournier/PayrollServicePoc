@@ -40,6 +40,13 @@ cd frontend && npm run lint                  # ESLint
 cd listenerClient && npm install && npm run dev
 ```
 
+### Seed data
+```bash
+docker-compose up seed              # Run after the stack is up
+```
+
+Creates 5 employees, 40 time entries (for the 2 hourly employees), 5 tax records, and 7 deductions via the REST API so the full event pipeline is exercised (Dapr outbox → Kafka → ksqlDB → ListenerApi → GraphQL). The script (`scripts/seed.sh`) clears existing data first, making it safe to re-run. Requires `payroll-api` and `listener-api` to be healthy.
+
 ### No test suite exists yet.
 
 ## Architecture
@@ -52,7 +59,7 @@ Api (.NET 9.0)  →  Application (.NET 7.0)  →  Domain (.NET 7.0)
                                             Infrastructure (.NET 7.0)
 ```
 
-- **Domain**: Entities (`Employee`, `TimeEntry`, `TaxInformation`, `Deduction`), domain events, repository interfaces. Base `Entity` class collects domain events in-memory.
+- **Domain**: Entities (`Employee`, `TimeEntry`, `TaxInformation`, `Deduction`), domain events, repository interfaces. Base `Entity` class collects domain events in-memory. `Employee.PayPeriodHours` (decimal, default 40) specifies hours per pay period for salaried employees; used by ksqlDB to calculate gross pay instead of time entries.
 - **Application**: MediatR CQRS — commands for writes, queries for reads, DTOs for API boundaries.
 - **Infrastructure**: MongoDB persistence, Dapr state store integration, event publishing, data seeding. Contains `DependencyInjection.cs` for all service registration.
 - **Api**: ASP.NET Core controllers, Swagger UI at `/swagger`.
@@ -123,7 +130,7 @@ employee-events topic
 
 **Key design decisions:**
 
-- **`data` is VARCHAR, not STRUCT** — Dapr's outbox stringifies the JSON payload (known issue #8130). Fields are extracted via `EXTRACTJSONFIELD(data, '$.FieldName')` with PascalCase entity field names (`$.Id`, `$.EmployeeId`, `$.ClockIn`, `$.ClockOut`, `$.HoursWorked`).
+- **`data` is VARCHAR, not STRUCT** — Dapr's outbox stringifies the JSON payload (known issue #8130). Fields are extracted via `EXTRACTJSONFIELD(data, '$.FieldName')` with PascalCase entity field names (`$.Id`, `$.EmployeeId`, `$.ClockIn`, `$.ClockOut`, `$.HoursWorked`, `$.PayPeriodHours`).
 - **Event type filtering** — The top-level CloudEvent `type` is always `com.dapr.event.sent`. The actual event type is extracted from `$.DomainEvents[0].EventType` inside the stringified data.
 - **Edit-safe aggregation** — `AS_MAP(COLLECT_LIST(TIME_ENTRY_ID), COLLECT_LIST(HOURS_WORKED))` deduplicates by time entry ID (last value wins for duplicate keys), then `REDUCE(MAP_VALUES(...))` sums the latest hours per entry. This prevents double-counting when time entries are edited.
 - **Pay period math** — Bi-weekly periods starting from epoch 2024-01-01T00:00:00Z (1704067200000 ms), each 14 days (1209600000 ms).
@@ -136,13 +143,14 @@ employee-events topic
 **`employee-gross-pay` topic schema:**
 
 - Key (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55}`
-- Value (JSON): `{"PAY_RATE": 28.5, "PAY_TYPE": "1", "EFFECTIVE_HOURLY_RATE": 28.5, "TOTAL_HOURS_WORKED": 12.0, "GROSS_PAY": 342.0, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00", "EVENT_COUNT": 5}`
+- Value (JSON): `{"PAY_RATE": 28.5, "PAY_TYPE": "1", "PAY_PERIOD_HOURS": 40.0, "EFFECTIVE_HOURLY_RATE": 28.5, "TOTAL_HOURS_WORKED": 12.0, "GROSS_PAY": 342.0, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00", "EVENT_COUNT": 5}`
 
 **Gross pay design decisions:**
 
 - **Single-stream approach** — Both employee events (with `PayRate`) and time entry events (with `HoursWorked`) flow through the same `employee-events` topic. `GROSS_PAY_EVENTS` captures both, normalizing `EMPLOYEE_ID` via `COALESCE($.EmployeeId, $.Id)`.
 - **Pay rate tracking** — `LATEST_BY_OFFSET(PAY_RATE, true)` ignores nulls from time entry events, keeping the most recent rate from employee events. The `__PAY_RATE__` sentinel for `TIME_ENTRY_ID` contributes 0 hours to the AS_MAP dedup.
 - **Salary vs Hourly** — `PayType=1` (Hourly): rate is $/hour. `PayType=2` (Salary): rate is $/year, divided by 2080 (52 weeks × 40 hours) to get the effective hourly rate.
+- **PayPeriodHours for salaried employees** — Salaried employees don't clock in/out. The `PayPeriodHours` field on the Employee entity (default 40) specifies how many hours per pay period a salaried employee works. The ksqlDB pipeline uses `LATEST_BY_OFFSET(PAY_PERIOD_HOURS, true)` for `TOTAL_HOURS_WORKED` when `PAY_TYPE = '2'`, instead of summing time entries. Hourly employees still use the AS_MAP+REDUCE dedup pattern.
 - **Current period only** — Pay rate changes are assigned to the current pay period (via `$.UpdatedAt`), so only that period's `GROSS_PAY` updates. Past periods retain their existing values.
 
 **Init container behavior:** The `ksqldb-init` container terminates all running queries before executing DROP/CREATE statements, making it safe for re-deploys.
@@ -165,6 +173,7 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 - `src/ListenerApi/Program.cs` — GraphQL schema, Dapr subscription, migration runner
 - `dapr/components/statestore-mongodb.yaml` — outbox configuration (critical for event publishing)
 - `ksqldb/statements.sql` — ksqlDB stream/table definitions for pay period aggregation
+- `scripts/seed.sh` — API-based seed script (runs as Docker container, exercises full event pipeline)
 
 ## Known Issues
 
