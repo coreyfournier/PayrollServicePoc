@@ -55,6 +55,7 @@ public class MongoDbContext
             // Time entry events
             RegisterClassMap<EmployeeClockedInEvent>();
             RegisterClassMap<EmployeeClockedOutEvent>();
+            RegisterClassMap<TimeEntryUpdatedEvent>();
 
             // Configure ObjectSerializer to allow all types (needed for 'object' typed properties)
             var objectSerializer = new ObjectSerializer(type => ObjectSerializer.AllAllowedTypes(type));

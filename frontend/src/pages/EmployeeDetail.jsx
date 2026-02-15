@@ -7,7 +7,7 @@ import {
 import {
   getEmployee, getTimeEntries, getTaxInfo, getDeductions,
   clockIn, clockOut, createTaxInfo, updateTaxInfo,
-  createDeduction, updateDeduction, deleteDeduction
+  createDeduction, updateDeduction, deleteDeduction, updateTimeEntry
 } from '../api';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -33,6 +33,12 @@ function EmployeeDetail() {
   const [showDeductionModal, setShowDeductionModal] = useState(false);
   const [editingDeduction, setEditingDeduction] = useState(null);
   const [clockedIn, setClockedIn] = useState(false);
+  const [showTimeEntryModal, setShowTimeEntryModal] = useState(false);
+  const [editingTimeEntry, setEditingTimeEntry] = useState(null);
+  const [timeEntryForm, setTimeEntryForm] = useState({
+    clockIn: '',
+    clockOut: '',
+  });
 
   const [taxForm, setTaxForm] = useState({
     federalFilingStatus: 'Single',
@@ -191,6 +197,34 @@ function EmployeeDetail() {
     }
   };
 
+  const handleOpenTimeEntryModal = (entry) => {
+    setEditingTimeEntry(entry);
+    const clockInLocal = new Date(entry.clockIn).toISOString().slice(0, 16);
+    const clockOutLocal = entry.clockOut
+      ? new Date(entry.clockOut).toISOString().slice(0, 16)
+      : '';
+    setTimeEntryForm({ clockIn: clockInLocal, clockOut: clockOutLocal });
+    setShowTimeEntryModal(true);
+  };
+
+  const handleSaveTimeEntry = async (e) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        clockIn: new Date(timeEntryForm.clockIn).toISOString(),
+        clockOut: timeEntryForm.clockOut
+          ? new Date(timeEntryForm.clockOut).toISOString()
+          : null,
+      };
+      await updateTimeEntry(editingTimeEntry.id, payload);
+      setShowTimeEntryModal(false);
+      loadAllData();
+    } catch (error) {
+      console.error('Error updating time entry:', error);
+      alert(error.response?.data || 'Error updating time entry');
+    }
+  };
+
   const formatCurrency = (amount, payType) => {
     if (payType === 2) {
       return `$${amount.toLocaleString()}/year`;
@@ -340,6 +374,7 @@ function EmployeeDetail() {
                         <th>Clock In</th>
                         <th>Clock Out</th>
                         <th>Hours Worked</th>
+                        <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -354,6 +389,16 @@ function EmployeeDetail() {
                             }
                           </td>
                           <td>{entry.hoursWorked.toFixed(2)} hrs</td>
+                          <td>
+                            <div className="actions-cell">
+                              <button
+                                className="btn btn-secondary btn-sm btn-icon"
+                                onClick={() => handleOpenTimeEntryModal(entry)}
+                              >
+                                <Edit />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -665,6 +710,54 @@ function EmployeeDetail() {
                   </button>
                   <button type="submit" className="btn btn-primary">
                     {editingDeduction ? 'Save Changes' : 'Add Deduction'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTimeEntryModal && (
+        <div className="modal-overlay" onClick={() => setShowTimeEntryModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Edit Time Entry</h3>
+              <button className="modal-close" onClick={() => setShowTimeEntryModal(false)}>
+                <X />
+              </button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handleSaveTimeEntry}>
+                <div className="form-group">
+                  <label className="form-label">Clock In</label>
+                  <input
+                    type="datetime-local"
+                    className="form-input"
+                    value={timeEntryForm.clockIn}
+                    onChange={(e) => setTimeEntryForm({ ...timeEntryForm, clockIn: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Clock Out</label>
+                  <input
+                    type="datetime-local"
+                    className="form-input"
+                    value={timeEntryForm.clockOut}
+                    onChange={(e) => setTimeEntryForm({ ...timeEntryForm, clockOut: e.target.value })}
+                  />
+                  <small style={{ color: '#64748b', fontSize: '12px' }}>
+                    Leave empty if the entry is still in progress.
+                  </small>
+                </div>
+
+                <div className="form-actions">
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowTimeEntryModal(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    Save Changes
                   </button>
                 </div>
               </form>

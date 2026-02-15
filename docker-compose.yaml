@@ -35,6 +35,8 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     networks:
       - payroll-network
@@ -60,6 +62,7 @@ services:
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic timeentry-events
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic taxinfo-events
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic deduction-events
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
 
       echo 'Topics created successfully:'
       kafka-topics --list --bootstrap-server kafka:9092
@@ -125,6 +128,79 @@ services:
     networks:
       - payroll-network
 
+  # ksqlDB server for stream processing
+  ksqldb-server:
+    image: confluentinc/cp-ksqldb-server:7.7.1
+    container_name: ksqldb-server
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_BOOTSTRAP_SERVERS: kafka:9092
+      KSQL_LISTENERS: http://0.0.0.0:8088/
+      KSQL_KSQL_SERVICE_ID: payroll_ksqldb_
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_NAME: KSQL_PROCESSING_LOG
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - payroll-network
+
+  # ksqlDB init container - creates streams and tables on startup
+  ksqldb-init:
+    image: confluentinc/cp-ksqldb-server:7.7.1
+    container_name: ksqldb-init
+    depends_on:
+      - ksqldb-server
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo 'Waiting for ksqlDB server to be ready...'
+        while ! curl -sf http://ksqldb-server:8088/info > /dev/null 2>&1; do
+          echo 'ksqlDB not ready yet, retrying in 5s...'
+          sleep 5
+        done
+        echo 'ksqlDB is ready.'
+
+        # Terminate all running queries so DROP statements can succeed
+        echo 'Terminating existing queries...'
+        QUERY_IDS=$$(curl -sf http://ksqldb-server:8088/ksql \
+          -H 'Content-Type: application/vnd.ksql.v1+json' \
+          -d '{"ksql": "SHOW QUERIES;"}' \
+          | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//')
+        for qid in $$QUERY_IDS; do
+          echo "Terminating query $$qid"
+          curl -sf -X POST http://ksqldb-server:8088/ksql \
+            -H 'Content-Type: application/vnd.ksql.v1+json' \
+            -d "{\"ksql\": \"TERMINATE $${qid};\"}" || true
+          sleep 1
+        done
+
+        echo 'Submitting SQL statements...'
+
+        # Read the SQL file and split on semicolons, submitting each statement
+        while IFS= read -r stmt; do
+          # Skip empty lines and comments
+          [ -z "$$stmt" ] && continue
+
+          echo "Executing: $$stmt"
+          curl -sf -X POST http://ksqldb-server:8088/ksql \
+            -H 'Content-Type: application/vnd.ksql.v1+json' \
+            -d "{\"ksql\": \"$${stmt}\", \"streamsProperties\": {}}" \
+            && echo -e '\nStatement executed successfully.' \
+            || echo -e '\nStatement execution failed.'
+          sleep 2
+        done < <(
+          # Collapse multi-line SQL into single-line statements split by semicolons
+          sed 's/--.*$$//' /statements.sql | tr '\n' ' ' | sed 's/;/;\n/g' | sed 's/^[[:space:]]*//' | grep -v '^$$'
+        )
+
+        echo 'All ksqlDB statements submitted.'
+    volumes:
+      - ./ksqldb/statements.sql:/statements.sql
+    networks:
+      - payroll-network
+
   # Kafka UI for monitoring
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -135,6 +211,7 @@ services:
       KAFKA_CLUSTERS_0_NAME: payroll-cluster
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      KAFKA_CLUSTERS_0_KSQLDBSERVER: http://ksqldb-server:8088
     depends_on:
       kafka:
         condition: service_healthy
