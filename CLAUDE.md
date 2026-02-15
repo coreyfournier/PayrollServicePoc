@@ -61,18 +61,22 @@ Api (.NET 9.0)  →  Application (.NET 7.0)  →  Domain (.NET 7.0)
 
 The `Features__UseDaprOutbox` env var (default `true` in docker-compose) toggles between:
 
-1. **DaprStateStoreUnitOfWork** — writes entity state + events atomically via Dapr state store's built-in outbox, which auto-publishes to Kafka.
+1. **DaprStateStoreUnitOfWork** — Dapr state store is the authoritative write path. `ExecuteAsync` writes entity state + outbox events atomically via the Dapr state store transaction FIRST, then updates the MongoDB collection as a best-effort read model. If the Dapr transaction fails, nothing is written (consistent). If the MongoDB write fails, a warning is logged but the request succeeds (entity is safely in Dapr state store).
 2. **TransactionalUnitOfWork** — writes entity + outbox messages to MongoDB in a transaction, then publishes via `DaprEventPublisher` separately.
 
 Both live in `src/PayrollService.Infrastructure/StateStore/` and `Persistence/`.
 
-### Event Flow
+### Write Path (DaprStateStoreUnitOfWork)
 
 ```
 Controller → MediatR Handler → Entity (raises domain events)
-  → UnitOfWork.ExecuteAsync() → Dapr State Store (outbox) → Kafka
+  → DaprStateStoreUnitOfWork.ExecuteAsync()
+      1. Dapr State Store Transaction  (entity + outbox — ATOMIC, SOURCE OF TRUTH) → Kafka
+      2. MongoDB Collection Write      (read model — BEST-EFFORT, logged on failure)
   → ListenerApi (Dapr topic subscription) → MySQL → GraphQL subscription → ListenerClient
 ```
+
+Repository `AddAsync` methods use `ReplaceOneAsync` with `IsUpsert = true` to be idempotent — retries after a Dapr success don't produce duplicate-key errors in MongoDB.
 
 ### ListenerApi (.NET 7.0)
 

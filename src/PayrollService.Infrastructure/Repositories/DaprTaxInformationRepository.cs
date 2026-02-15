@@ -56,7 +56,11 @@ public class DaprTaxInformationRepository : ITaxInformationRepository
 
     public async Task<TaxInformation> AddAsync(TaxInformation taxInformation, CancellationToken cancellationToken = default)
     {
-        await _mongoContext.TaxInformation.InsertOneAsync(taxInformation, cancellationToken: cancellationToken);
+        await _mongoContext.TaxInformation.ReplaceOneAsync(
+            t => t.Id == taxInformation.Id,
+            taxInformation,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken: cancellationToken);
         return taxInformation;
     }
 

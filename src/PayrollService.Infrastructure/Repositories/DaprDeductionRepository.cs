@@ -56,7 +56,11 @@ public class DaprDeductionRepository : IDeductionRepository
 
     public async Task<Deduction> AddAsync(Deduction deduction, CancellationToken cancellationToken = default)
     {
-        await _mongoContext.Deductions.InsertOneAsync(deduction, cancellationToken: cancellationToken);
+        await _mongoContext.Deductions.ReplaceOneAsync(
+            d => d.Id == deduction.Id,
+            deduction,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken: cancellationToken);
         return deduction;
     }
 

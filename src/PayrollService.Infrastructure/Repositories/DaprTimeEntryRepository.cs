@@ -64,7 +64,11 @@ public class DaprTimeEntryRepository : ITimeEntryRepository
 
     public async Task<TimeEntry> AddAsync(TimeEntry timeEntry, CancellationToken cancellationToken = default)
     {
-        await _mongoContext.TimeEntries.InsertOneAsync(timeEntry, cancellationToken: cancellationToken);
+        await _mongoContext.TimeEntries.ReplaceOneAsync(
+            t => t.Id == timeEntry.Id,
+            timeEntry,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken: cancellationToken);
         return timeEntry;
     }
 

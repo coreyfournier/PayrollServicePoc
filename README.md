@@ -11,6 +11,22 @@ This project follows Domain Driven Design (DDD) principles with the following la
 - **Infrastructure Layer**: Contains MongoDB repositories, Dapr event publishing, and data seeding
 - **API Layer**: Contains ASP.NET Core controllers and Swagger documentation
 
+### Write Path (Dapr Outbox Mode)
+
+When `Features__UseDaprOutbox` is `true` (the default), writes follow a two-phase approach with the Dapr state store as the source of truth:
+
+```
+Controller → MediatR Handler → Entity (raises domain events)
+  → DaprStateStoreUnitOfWork.ExecuteAsync()
+      1. Dapr State Store Transaction  (entity + outbox — ATOMIC, SOURCE OF TRUTH)
+      2. MongoDB Collection Write      (read model — BEST-EFFORT)
+```
+
+- **Step 1 fails** → exception propagates, nothing is written anywhere → fully consistent.
+- **Step 2 fails** → entity is safely in the Dapr state store, `GetByIdAsync` still works (reads Dapr first), collection queries may be stale → acceptable trade-off for a POC.
+
+Repository `AddAsync` methods use `ReplaceOneAsync` with `IsUpsert = true` so that retries after a Dapr success don't produce duplicate-key errors in MongoDB.
+
 ## Features
 
 - **Employee Management**: CRUD operations for employee demographics (salary/hourly with pay rates)
@@ -18,7 +34,7 @@ This project follows Domain Driven Design (DDD) principles with the following la
 - **Tax Information**: Federal and state tax withholding configuration
 - **Deductions**: Various payroll deductions (health, dental, 401k, etc.)
 - **Event-Driven**: All data changes trigger domain events published to Kafka via Dapr
-- **Transactional Consistency**: Outbox pattern ensures database and Kafka are always in sync
+- **Transactional Consistency**: Dapr state store is the authoritative write path — entity state and outbox events are written atomically. MongoDB collections serve as a best-effort read model updated after the Dapr transaction succeeds.
 
 ## Prerequisites
 
