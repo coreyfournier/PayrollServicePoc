@@ -109,6 +109,10 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 - `statestore-mongodb.yaml` — MongoDB state store with outbox config (`outboxPublishPubsub: kafka-pubsub`, `outboxPublishTopic: employee-events`)
 - `kafka-pubsub.yaml` / `kafka-pubsub-listener.yaml` — Kafka pub/sub for payroll-api and listener-api respectively
 
+### Dapr Sidecars
+
+Both Dapr sidecars (`payroll-api-dapr`, `listener-api-dapr`) run as separate containers on `payroll-network` with `-app-channel-address` pointing at their app's service name. This ensures Docker DNS resolves the app across container restarts. **Do not use `network_mode: "service:..."` for sidecars** — it shares the app's network namespace, so when the app restarts the sidecar loses DNS and Kafka connectivity permanently until manually restarted.
+
 ### Kafka Topics
 
 `employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`) are managed by ksqlDB.
