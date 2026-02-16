@@ -23,7 +23,7 @@ DROP TABLE IF EXISTS EMPLOYEE_NET_PAY_BY_PERIOD DELETE TOPIC;
 DROP STREAM IF EXISTS EMPLOYEE_NET_PAY;
 DROP TABLE IF EXISTS EMPLOYEE_GROSS_PAY_BY_PERIOD DELETE TOPIC;
 DROP STREAM IF EXISTS GROSS_PAY_EVENTS DELETE TOPIC;
-DROP TABLE IF EXISTS PAY_PERIOD_HOURS DELETE TOPIC;
+DROP TABLE IF EXISTS PAY_PERIOD_HOURS_BY_PERIOD DELETE TOPIC;
 DROP STREAM IF EXISTS TIME_ENTRY_EVENTS DELETE TOPIC;
 
 -- Legacy objects from previous schema versions
@@ -85,7 +85,7 @@ CREATE STREAM TIME_ENTRY_EVENTS AS
 -- so edits replace the previous hours instead of adding to them.
 -- REDUCE(MAP_VALUES(...)) then sums the deduplicated hours.
 -- ============================================================
-CREATE TABLE PAY_PERIOD_HOURS WITH (
+CREATE TABLE PAY_PERIOD_HOURS_BY_PERIOD WITH (
   KAFKA_TOPIC='payperiod-hours-changed',
   KEY_FORMAT='JSON',
   VALUE_FORMAT='JSON',
@@ -167,7 +167,7 @@ CREATE STREAM GROSS_PAY_EVENTS AS
 -- PAY_RATE / PAY_TYPE: LATEST_BY_OFFSET(col, true) ignores nulls, so
 -- timeentry events (which have null pay rate) don't overwrite the rate.
 -- TOTAL_HOURS_WORKED: same AS_MAP + COLLECT_LIST + REDUCE dedup pattern
--- as PAY_PERIOD_HOURS — the '__PAY_RATE__' sentinel contributes 0 hours.
+-- as PAY_PERIOD_HOURS_BY_PERIOD — the '__PAY_RATE__' sentinel contributes 0 hours.
 -- EFFECTIVE_HOURLY_RATE: for Salary (PayType=2), divides annual rate by
 -- 2080 hours (52 weeks × 40 hrs). For Hourly (PayType=1), rate is $/hour.
 -- GROSS_PAY: EFFECTIVE_HOURLY_RATE × TOTAL_HOURS_WORKED
