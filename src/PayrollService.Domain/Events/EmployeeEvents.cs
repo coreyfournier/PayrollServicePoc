@@ -29,8 +29,9 @@ public class EmployeeUpdatedEvent : DomainEvent
     public string Email { get; }
     public PayType PayType { get; }
     public decimal PayRate { get; }
+    public decimal PayPeriodHours { get; }
 
-    public EmployeeUpdatedEvent(Guid employeeId, string firstName, string lastName, string email, PayType payType, decimal payRate)
+    public EmployeeUpdatedEvent(Guid employeeId, string firstName, string lastName, string email, PayType payType, decimal payRate, decimal payPeriodHours = 40)
     {
         EmployeeId = employeeId;
         FirstName = firstName;
@@ -38,6 +39,7 @@ public class EmployeeUpdatedEvent : DomainEvent
         Email = email;
         PayType = payType;
         PayRate = payRate;
+        PayPeriodHours = payPeriodHours;
     }
 }
 

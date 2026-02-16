@@ -138,6 +138,7 @@ CREATE STREAM GROSS_PAY_EVENTS AS
     COALESCE(CAST(EXTRACTJSONFIELD(data, '$.HoursWorked') AS DOUBLE), CAST(0.0 AS DOUBLE)) AS HOURS_WORKED,
     CAST(EXTRACTJSONFIELD(data, '$.PayRate') AS DOUBLE) AS PAY_RATE,
     EXTRACTJSONFIELD(data, '$.PayType') AS PAY_TYPE,
+    CAST(EXTRACTJSONFIELD(data, '$.PayPeriodHours') AS DOUBLE) AS PAY_PERIOD_HOURS,
     CAST(
       FLOOR(
         (UNIX_TIMESTAMP(PARSE_TIMESTAMP(
@@ -180,16 +181,21 @@ CREATE TABLE EMPLOYEE_GROSS_PAY WITH (
     PAY_PERIOD_NUMBER,
     LATEST_BY_OFFSET(PAY_RATE, true) AS PAY_RATE,
     LATEST_BY_OFFSET(PAY_TYPE, true) AS PAY_TYPE,
-    REDUCE(
-      MAP_VALUES(
-        AS_MAP(
-          COLLECT_LIST(TIME_ENTRY_ID),
-          COLLECT_LIST(HOURS_WORKED)
-        )
-      ),
-      CAST(0.0 AS DOUBLE),
-      (s, x) => s + x
-    ) AS TOTAL_HOURS_WORKED,
+    LATEST_BY_OFFSET(PAY_PERIOD_HOURS, true) AS PAY_PERIOD_HOURS,
+    CASE
+      WHEN LATEST_BY_OFFSET(PAY_TYPE, true) = '2'
+        THEN LATEST_BY_OFFSET(PAY_PERIOD_HOURS, true)
+      ELSE REDUCE(
+        MAP_VALUES(
+          AS_MAP(
+            COLLECT_LIST(TIME_ENTRY_ID),
+            COLLECT_LIST(HOURS_WORKED)
+          )
+        ),
+        CAST(0.0 AS DOUBLE),
+        (s, x) => s + x
+      )
+    END AS TOTAL_HOURS_WORKED,
     CASE
       WHEN LATEST_BY_OFFSET(PAY_TYPE, true) = '2'
         THEN LATEST_BY_OFFSET(PAY_RATE, true) / 2080.0
@@ -201,16 +207,20 @@ CREATE TABLE EMPLOYEE_GROSS_PAY WITH (
       ELSE LATEST_BY_OFFSET(PAY_RATE, true)
     END
     *
-    REDUCE(
-      MAP_VALUES(
-        AS_MAP(
-          COLLECT_LIST(TIME_ENTRY_ID),
-          COLLECT_LIST(HOURS_WORKED)
-        )
-      ),
-      CAST(0.0 AS DOUBLE),
-      (s, x) => s + x
-    ) AS GROSS_PAY,
+    CASE
+      WHEN LATEST_BY_OFFSET(PAY_TYPE, true) = '2'
+        THEN LATEST_BY_OFFSET(PAY_PERIOD_HOURS, true)
+      ELSE REDUCE(
+        MAP_VALUES(
+          AS_MAP(
+            COLLECT_LIST(TIME_ENTRY_ID),
+            COLLECT_LIST(HOURS_WORKED)
+          )
+        ),
+        CAST(0.0 AS DOUBLE),
+        (s, x) => s + x
+      )
+    END AS GROSS_PAY,
     FORMAT_TIMESTAMP(
       FROM_UNIXTIME(1704067200000 + (PAY_PERIOD_NUMBER * 1209600000)),
       'yyyy-MM-dd''T''HH:mm:ss'

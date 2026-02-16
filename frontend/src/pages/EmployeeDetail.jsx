@@ -356,6 +356,12 @@ function EmployeeDetail() {
                   <div className="info-value">{getTotalHours()} hrs</div>
                 </div>
               )}
+              {employee.payType === 2 && (
+                <div className="info-item">
+                  <div className="info-label">Hours per Pay Period</div>
+                  <div className="info-value">{employee.payPeriodHours} hrs</div>
+                </div>
+              )}
               <div className="info-item">
                 <div className="info-label">Active Deductions</div>
                 <div className="info-value">{deductions.filter(d => d.isActive).length}</div>

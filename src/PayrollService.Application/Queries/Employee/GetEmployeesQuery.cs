@@ -26,6 +26,7 @@ public class GetEmployeesQueryHandler : IRequestHandler<GetEmployeesQuery, IEnum
             e.Email,
             e.PayType,
             e.PayRate,
+            e.PayPeriodHours,
             e.HireDate,
             e.IsActive,
             e.CreatedAt,

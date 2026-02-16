@@ -7,6 +7,7 @@ export const GET_ALL_EMPLOYEES = `
       email
       payType
       payRate
+      payPeriodHours
       isActive
       lastEventType
       lastEventTimestamp

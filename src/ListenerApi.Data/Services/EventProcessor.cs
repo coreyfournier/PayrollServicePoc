@@ -58,6 +58,7 @@ public class EventProcessor
                 record.Email = eventData.Email;
                 record.PayType = eventData.PayType?.ToString() ?? string.Empty;
                 record.PayRate = eventData.PayRate;
+                record.PayPeriodHours = eventData.PayPeriodHours ?? 40;
                 record.IsActive = eventData.IsActive;
                 break;
             case "employee.deactivated":
@@ -109,6 +110,7 @@ public class EmployeeEventPayload
     public string Email { get; set; } = string.Empty;
     public int? PayType { get; set; }
     public decimal? PayRate { get; set; }
+    public decimal? PayPeriodHours { get; set; }
     public bool IsActive { get; set; } = true;
 
     // Nested domain events from Dapr outbox entity state (Dapr bug #8130:

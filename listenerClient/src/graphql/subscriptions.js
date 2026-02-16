@@ -8,6 +8,7 @@ export const EMPLOYEE_CHANGE_SUBSCRIPTION = `
         email
         payType
         payRate
+        payPeriodHours
         isActive
         lastEventType
         lastEventTimestamp

@@ -19,6 +19,7 @@ function EmployeeList() {
     email: '',
     payType: 1,
     payRate: '',
+    payPeriodHours: 40,
     hireDate: '',
   });
 
@@ -60,6 +61,7 @@ function EmployeeList() {
         email: employee.email,
         payType: employee.payType,
         payRate: employee.payRate,
+        payPeriodHours: employee.payPeriodHours ?? 40,
         hireDate: employee.hireDate.split('T')[0],
       });
     } else {
@@ -70,6 +72,7 @@ function EmployeeList() {
         email: '',
         payType: 1,
         payRate: '',
+        payPeriodHours: 40,
         hireDate: new Date().toISOString().split('T')[0],
       });
     }
@@ -88,6 +91,7 @@ function EmployeeList() {
         ...formData,
         payType: parseInt(formData.payType),
         payRate: parseFloat(formData.payRate),
+        payPeriodHours: parseFloat(formData.payPeriodHours),
         hireDate: new Date(formData.hireDate).toISOString(),
       };
 
@@ -326,6 +330,19 @@ function EmployeeList() {
                     />
                   </div>
                 </div>
+                {parseInt(formData.payType) === 2 && (
+                  <div className="form-group">
+                    <label className="form-label">Hours per Pay Period</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      step="0.5"
+                      min="0"
+                      value={formData.payPeriodHours}
+                      onChange={(e) => setFormData({ ...formData, payPeriodHours: e.target.value })}
+                    />
+                  </div>
+                )}
                 {!editingEmployee && (
                   <div className="form-group">
                     <label className="form-label">Hire Date</label>

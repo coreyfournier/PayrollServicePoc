@@ -104,7 +104,12 @@ export default function EmployeeList() {
                     </td>
                     <td>{employee.email}</td>
                     <td>{employee.payType}</td>
-                    <td className="pay-rate">${employee.payRate?.toFixed(2) || '0.00'}</td>
+                    <td className="pay-rate">
+                      ${employee.payRate?.toFixed(2) || '0.00'}
+                      {employee.payType === 'Salary' || employee.payType === '2'
+                        ? ` (${employee.payPeriodHours ?? 40} hrs/pp)`
+                        : ''}
+                    </td>
                     <td>
                       <span className={`status-badge ${employee.isActive ? 'active' : 'inactive'}`}>
                         {employee.isActive ? 'Active' : 'Inactive'}
