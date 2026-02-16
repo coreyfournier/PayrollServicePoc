@@ -115,7 +115,7 @@ Both Dapr sidecars (`payroll-api-dapr`, `listener-api-dapr`) run as separate con
 
 ### Kafka Topics
 
-`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`) are managed by ksqlDB.
+`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay`, `employee-net-pay` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`) are managed by ksqlDB.
 
 ### ksqlDB Stream Processing
 
@@ -164,6 +164,48 @@ employee-events topic
 - CLI: `docker exec -it ksqldb-server ksql http://localhost:8088`
 - REST: `curl http://localhost:8088/ksql -H 'Content-Type: application/vnd.ksql.v1+json' -d '{"ksql": "SHOW TABLES;"}'`
 
+### Net Pay Processor (Kafka Streams, Java 17)
+
+Standalone Kafka Streams application (`src/NetPayProcessor/`) that computes per-employee, per-pay-period net pay by combining gross pay with tax configuration and deductions. Connects directly to Kafka (no Dapr sidecar needed).
+
+**Pipeline:**
+
+```
+employee-gross-pay topic ──┐
+                           ├──→ Kafka Streams App ──→ employee-net-pay topic
+employee-events topic ─────┘    (net-pay-processor)
+  (taxinfo.*, deduction.*)
+```
+
+**Internal topology** (Processor API with state stores):
+- `gross-pay-store` — keyed by `employeeId:payPeriod`, latest gross pay from ksqlDB
+- `tax-config-store` — keyed by `employeeId`, latest tax config (filing status, state, additional withholding)
+- `deduction-store` — keyed by `employeeId`, map of `deductionId → {amount, isPercentage, isActive}`
+
+When a **gross pay event** arrives: update store → look up tax & deductions → compute net pay → emit.
+When a **tax info event** arrives: update store → look up latest gross pay for current period → recompute → emit.
+When a **deduction event** arrives: update store → look up latest gross pay for current period → recompute → emit.
+
+**Tax calculation:**
+- **Federal**: Progressive brackets (2024 rates) — annualizes bi-weekly gross × 26, applies brackets, divides by 26. Single/HeadOfHousehold use single brackets; Married uses married brackets.
+- **State**: Simplified flat rates per state (e.g., CA=9.3%, NY=6.85%, TX=0%, WA=0%, IL=4.95%).
+- **Additional withholding**: `AdditionalFederalWithholding` and `AdditionalStateWithholding` from tax info events added on top.
+
+**Deduction calculation:**
+- **Fixed** (`isPercentage=false`): subtracted directly
+- **Percentage** (`isPercentage=true`): `(amount/100) × grossPay`
+- **Inactive** (`isActive=false`): contribute $0 (kept in map for reactivation)
+
+**`employee-net-pay` topic schema:**
+- Key (JSON): `{"employeeId": "...", "payPeriodNumber": 55}`
+- Value (JSON): `{"grossPay": 4440.0, "federalTax": 170.77, "stateTax": 0.0, "additionalFederalWithholding": 50.0, "additionalStateWithholding": 25.0, "totalTax": 245.77, "totalFixedDeductions": 225.0, "totalPercentDeductions": 0.0, "totalDeductions": 225.0, "netPay": 3969.23, "payRate": 28.5, "payType": "1", "totalHoursWorked": 155.75, "payPeriodStart": "2026-02-09T00:00:00", "payPeriodEnd": "2026-02-23T00:00:00"}`
+
+**Key files:**
+- `src/NetPayProcessor/pom.xml` — Maven project (kafka-streams, jackson)
+- `src/NetPayProcessor/src/main/java/com/payroll/netpay/NetPayApp.java` — topology + main
+- `src/NetPayProcessor/src/main/java/com/payroll/netpay/NetPayProcessor.java` — unified processor
+- `src/NetPayProcessor/src/main/java/com/payroll/netpay/TaxCalculator.java` — progressive bracket + state tax logic
+
 ### MongoDB
 
 Runs as a single-node replica set (`rs0`) to support multi-document transactions. Replica set is auto-initialized via the container healthcheck script.
@@ -178,6 +220,7 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 - `dapr/components/statestore-mongodb.yaml` — outbox configuration (critical for event publishing)
 - `ksqldb/statements.sql` — ksqlDB stream/table definitions for pay period aggregation
 - `scripts/seed.sh` — API-based seed script (runs as Docker container, exercises full event pipeline)
+- `src/NetPayProcessor/` — Kafka Streams Java app for net pay calculation
 
 ## Known Issues
 

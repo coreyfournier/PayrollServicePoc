@@ -64,6 +64,7 @@ services:
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic deduction-events
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-gross-pay
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-net-pay
 
       echo 'Topics created successfully:'
       kafka-topics --list --bootstrap-server kafka:9092
@@ -201,6 +202,22 @@ services:
       - ./ksqldb/statements.sql:/statements.sql
     networks:
       - payroll-network
+
+  # Net Pay Processor — Kafka Streams app computing net pay from gross pay, taxes, and deductions
+  net-pay-processor:
+    build:
+      context: ./src/NetPayProcessor
+      dockerfile: Dockerfile
+    container_name: net-pay-processor
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      APPLICATION_ID: net-pay-processor
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - payroll-network
+    restart: on-failure
 
   # Kafka UI for monitoring
   kafka-ui:
