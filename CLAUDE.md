@@ -129,7 +129,7 @@ employee-events topic
   ├→ TIME_ENTRY_EVENTS stream (filtered for timeentry.clockedout / timeentry.updated)
   │   → PAY_PERIOD_HOURS table (aggregated per employee + pay period → payperiod-hours-changed topic)
   └→ GROSS_PAY_EVENTS stream (employee + timeentry events, normalized fields)
-      → EMPLOYEE_GROSS_PAY table (rate × hours per employee + pay period → employee-gross-pay topic)
+      → EMPLOYEE_GROSS_PAY_BY_PERIOD table (rate × hours per employee + pay period → employee-gross-pay topic)
 
 employee-net-pay topic (produced by NetPayProcessor)
   → EMPLOYEE_NET_PAY stream (keyed by employeeId + payPeriodNumber)
