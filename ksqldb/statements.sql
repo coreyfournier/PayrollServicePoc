@@ -19,6 +19,8 @@
 -- ============================================================
 
 -- Current / new objects
+DROP TABLE IF EXISTS EMPLOYEE_NET_PAY_BY_PERIOD DELETE TOPIC;
+DROP STREAM IF EXISTS EMPLOYEE_NET_PAY;
 DROP TABLE IF EXISTS EMPLOYEE_GROSS_PAY DELETE TOPIC;
 DROP STREAM IF EXISTS GROSS_PAY_EVENTS DELETE TOPIC;
 DROP TABLE IF EXISTS PAY_PERIOD_HOURS DELETE TOPIC;
@@ -232,4 +234,74 @@ CREATE TABLE EMPLOYEE_GROSS_PAY WITH (
     COUNT(*) AS EVENT_COUNT
   FROM GROSS_PAY_EVENTS
   GROUP BY EMPLOYEE_ID, PAY_PERIOD_NUMBER
+  EMIT CHANGES;
+
+-- ============================================================
+-- Stream over the employee-net-pay topic (produced by NetPayProcessor)
+-- No DELETE TOPIC — preserves the external topic managed by NetPayProcessor.
+-- Key columns match the JSON key: {"employeeId":"...","payPeriodNumber":55}
+-- Value fields are camelCase matching Java NetPayResult serialization.
+-- ============================================================
+CREATE STREAM EMPLOYEE_NET_PAY (
+  employeeId VARCHAR KEY,
+  payPeriodNumber BIGINT KEY,
+  grossPay DOUBLE,
+  federalTax DOUBLE,
+  stateTax DOUBLE,
+  additionalFederalWithholding DOUBLE,
+  additionalStateWithholding DOUBLE,
+  totalTax DOUBLE,
+  totalFixedDeductions DOUBLE,
+  totalPercentDeductions DOUBLE,
+  totalDeductions DOUBLE,
+  netPay DOUBLE,
+  payRate DOUBLE,
+  payType VARCHAR,
+  totalHoursWorked DOUBLE,
+  payPeriodStart VARCHAR,
+  payPeriodEnd VARCHAR
+) WITH (
+  KAFKA_TOPIC='employee-net-pay',
+  KEY_FORMAT='JSON',
+  VALUE_FORMAT='JSON'
+);
+
+-- ============================================================
+-- Materialized table: employee net pay per pay period
+-- Tracks the latest net pay breakdown per employee + pay period.
+-- Each NetPayProcessor emission replaces the previous state via
+-- LATEST_BY_OFFSET, so the table always reflects current net pay.
+-- Queryable as a pull query (point lookup):
+--   SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD
+--     WHERE EMPLOYEEID = '...' AND PAYPERIODNUMBER = 55;
+-- Or as a push query:
+--   SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD EMIT CHANGES;
+-- ============================================================
+CREATE TABLE EMPLOYEE_NET_PAY_BY_PERIOD WITH (
+  KAFKA_TOPIC='employee-net-pay-by-period',
+  KEY_FORMAT='JSON',
+  VALUE_FORMAT='JSON',
+  PARTITIONS=3
+) AS
+  SELECT
+    employeeId,
+    payPeriodNumber,
+    LATEST_BY_OFFSET(grossPay) AS GROSS_PAY,
+    LATEST_BY_OFFSET(federalTax) AS FEDERAL_TAX,
+    LATEST_BY_OFFSET(stateTax) AS STATE_TAX,
+    LATEST_BY_OFFSET(additionalFederalWithholding) AS ADDITIONAL_FEDERAL_WITHHOLDING,
+    LATEST_BY_OFFSET(additionalStateWithholding) AS ADDITIONAL_STATE_WITHHOLDING,
+    LATEST_BY_OFFSET(totalTax) AS TOTAL_TAX,
+    LATEST_BY_OFFSET(totalFixedDeductions) AS TOTAL_FIXED_DEDUCTIONS,
+    LATEST_BY_OFFSET(totalPercentDeductions) AS TOTAL_PERCENT_DEDUCTIONS,
+    LATEST_BY_OFFSET(totalDeductions) AS TOTAL_DEDUCTIONS,
+    LATEST_BY_OFFSET(netPay) AS NET_PAY,
+    LATEST_BY_OFFSET(payRate) AS PAY_RATE,
+    LATEST_BY_OFFSET(payType) AS PAY_TYPE,
+    LATEST_BY_OFFSET(totalHoursWorked) AS TOTAL_HOURS_WORKED,
+    LATEST_BY_OFFSET(payPeriodStart) AS PAY_PERIOD_START,
+    LATEST_BY_OFFSET(payPeriodEnd) AS PAY_PERIOD_END,
+    COUNT(*) AS EVENT_COUNT
+  FROM EMPLOYEE_NET_PAY
+  GROUP BY employeeId, payPeriodNumber
   EMIT CHANGES;
