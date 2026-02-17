@@ -48,6 +48,12 @@ public class NetPayResult {
     @JsonProperty("payPeriodEnd")
     private String payPeriodEnd;
 
+    @JsonProperty("employeeId")
+    private String employeeId;
+
+    @JsonProperty("payPeriodNumber")
+    private long payPeriodNumber;
+
     public NetPayResult() {}
 
     public double getGrossPay() { return grossPay; }
@@ -94,4 +100,10 @@ public class NetPayResult {
 
     public String getPayPeriodEnd() { return payPeriodEnd; }
     public void setPayPeriodEnd(String payPeriodEnd) { this.payPeriodEnd = payPeriodEnd; }
+
+    public String getEmployeeId() { return employeeId; }
+    public void setEmployeeId(String employeeId) { this.employeeId = employeeId; }
+
+    public long getPayPeriodNumber() { return payPeriodNumber; }
+    public void setPayPeriodNumber(long payPeriodNumber) { this.payPeriodNumber = payPeriodNumber; }
 }

@@ -300,6 +300,8 @@ public class NetPayProcessor implements Processor<String, String, String, String
         result.setTotalHoursWorked(gp.getTotalHoursWorked());
         result.setPayPeriodStart(gp.getPayPeriodStart());
         result.setPayPeriodEnd(gp.getPayPeriodEnd());
+        result.setEmployeeId(employeeId);
+        result.setPayPeriodNumber(payPeriodNumber);
 
         // Output key: {"employeeId":"...","payPeriodNumber":55}
         String outputKey = mapper.writeValueAsString(

@@ -87,7 +87,11 @@ Repository `AddAsync` methods use `ReplaceOneAsync` with `IsUpsert = true` to be
 
 ### ListenerApi (.NET 7.0)
 
-Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). Subscribes to Kafka `employee-events` topic via Dapr. Processes events idempotently (checks `LastEventTimestamp`). Broadcasts changes to WebSocket subscribers via in-memory `ITopicEventSender`. Auto-applies EF Core migrations on startup.
+Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). Subscribes to Kafka `employee-events` and `employee-net-pay` topics via Dapr. Processes events idempotently (checks `LastEventTimestamp` for employees, `PayPeriodNumber` for pay attributes). Broadcasts changes to WebSocket subscribers via in-memory `ITopicEventSender`. Auto-applies EF Core migrations on startup.
+
+**Entities:**
+- `EmployeeRecord` — employee data from `employee-events` topic
+- `EmployeePayAttributes` — 1:1 with `EmployeeRecord`, stores latest pay period net pay breakdown from `employee-net-pay` topic. PK = `EmployeeId` (FK to `EmployeeRecord`, cascade delete). Exposed via GraphQL as `payAttributes` nested field on employees.
 
 ### Service Ports (Docker)
 
@@ -202,7 +206,7 @@ When a **deduction event** arrives: update store → look up latest gross pay fo
 
 **`employee-net-pay` topic schema:**
 - Key (JSON): `{"employeeId": "...", "payPeriodNumber": 55}`
-- Value (JSON): `{"grossPay": 4440.0, "federalTax": 170.77, "stateTax": 0.0, "additionalFederalWithholding": 50.0, "additionalStateWithholding": 25.0, "totalTax": 245.77, "totalFixedDeductions": 225.0, "totalPercentDeductions": 0.0, "totalDeductions": 225.0, "netPay": 3969.23, "payRate": 28.5, "payType": "1", "totalHoursWorked": 155.75, "payPeriodStart": "2026-02-09T00:00:00", "payPeriodEnd": "2026-02-23T00:00:00"}`
+- Value (JSON): `{"employeeId": "...", "payPeriodNumber": 55, "grossPay": 4440.0, "federalTax": 170.77, "stateTax": 0.0, "additionalFederalWithholding": 50.0, "additionalStateWithholding": 25.0, "totalTax": 245.77, "totalFixedDeductions": 225.0, "totalPercentDeductions": 0.0, "totalDeductions": 225.0, "netPay": 3969.23, "payRate": 28.5, "payType": "1", "totalHoursWorked": 155.75, "payPeriodStart": "2026-02-09T00:00:00", "payPeriodEnd": "2026-02-23T00:00:00"}`
 
 **`employee-net-pay-by-period` topic schema (ksqlDB materialized view):**
 - Key (JSON): `{"EMPLOYEEID": "...", "PAYPERIODNUMBER": 55}`
@@ -226,6 +230,8 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 - `src/PayrollService.Infrastructure/StateStore/DaprStateStoreUnitOfWork.cs` — atomic outbox logic
 - `src/PayrollService.Domain/Common/Entity.cs` — base entity with domain event collection
 - `src/ListenerApi/Program.cs` — GraphQL schema, Dapr subscription, migration runner
+- `src/ListenerApi.Data/Entities/EmployeePayAttributes.cs` — net pay breakdown entity (1:1 with EmployeeRecord)
+- `src/ListenerApi/Controllers/EventSubscriptionController.cs` — Dapr subscription endpoints (employee-events, employee-net-pay)
 - `dapr/components/statestore-mongodb.yaml` — outbox configuration (critical for event publishing)
 - `ksqldb/statements.sql` — ksqlDB stream/table definitions for pay period aggregation
 - `scripts/seed.sh` — API-based seed script (runs as Docker container, exercises full event pipeline)

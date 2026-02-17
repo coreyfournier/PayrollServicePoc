@@ -3,6 +3,7 @@ using System;
 using ListenerApi.Data.DbContext;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace ListenerApi.Data.Migrations
 {
     [DbContext(typeof(ListenerDbContext))]
-    partial class ListenerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260217031445_AddEmployeePayAttributes")]
+    partial class AddEmployeePayAttributes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

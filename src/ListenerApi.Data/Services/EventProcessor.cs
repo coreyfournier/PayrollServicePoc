@@ -7,15 +7,18 @@ namespace ListenerApi.Data.Services;
 public class EventProcessor
 {
     private readonly IEmployeeRecordRepository _repository;
+    private readonly IEmployeePayAttributesRepository _payAttributesRepository;
     private readonly ISubscriptionPublisher _subscriptionPublisher;
     private readonly ILogger<EventProcessor> _logger;
 
     public EventProcessor(
         IEmployeeRecordRepository repository,
+        IEmployeePayAttributesRepository payAttributesRepository,
         ISubscriptionPublisher subscriptionPublisher,
         ILogger<EventProcessor> logger)
     {
         _repository = repository;
+        _payAttributesRepository = payAttributesRepository;
         _subscriptionPublisher = subscriptionPublisher;
         _logger = logger;
     }
@@ -63,6 +66,7 @@ public class EventProcessor
                 break;
             case "employee.deactivated":
                 record.IsActive = false;
+                await _payAttributesRepository.DeleteByEmployeeIdAsync(employeeId);
                 break;
             case "employee.activated":
                 record.IsActive = true;
@@ -92,6 +96,61 @@ public class EventProcessor
 
         // Notify GraphQL subscribers
         await _subscriptionPublisher.PublishEmployeeChangeAsync(record, eventType);
+    }
+
+    public async Task ProcessNetPayEventAsync(NetPayEventPayload eventData)
+    {
+        if (!Guid.TryParse(eventData.EmployeeId, out var employeeId))
+        {
+            _logger.LogWarning("Invalid employeeId in net pay event: {EmployeeId}", eventData.EmployeeId);
+            return;
+        }
+
+        _logger.LogInformation("Processing net pay event for employee {EmployeeId}, period {PayPeriodNumber}",
+            employeeId, eventData.PayPeriodNumber);
+
+        // Idempotency: only update if incoming period >= existing
+        var existing = await _payAttributesRepository.GetByEmployeeIdAsync(employeeId);
+        if (existing != null && eventData.PayPeriodNumber < existing.PayPeriodNumber)
+        {
+            _logger.LogInformation("Skipping older net pay event for employee {EmployeeId} - existing period {ExistingPeriod} > incoming {IncomingPeriod}",
+                employeeId, existing.PayPeriodNumber, eventData.PayPeriodNumber);
+            return;
+        }
+
+        var payAttributes = new Entities.EmployeePayAttributes
+        {
+            EmployeeId = employeeId,
+            PayPeriodNumber = eventData.PayPeriodNumber,
+            GrossPay = (decimal)eventData.GrossPay,
+            FederalTax = (decimal)eventData.FederalTax,
+            StateTax = (decimal)eventData.StateTax,
+            AdditionalFederalWithholding = (decimal)eventData.AdditionalFederalWithholding,
+            AdditionalStateWithholding = (decimal)eventData.AdditionalStateWithholding,
+            TotalTax = (decimal)eventData.TotalTax,
+            TotalFixedDeductions = (decimal)eventData.TotalFixedDeductions,
+            TotalPercentDeductions = (decimal)eventData.TotalPercentDeductions,
+            TotalDeductions = (decimal)eventData.TotalDeductions,
+            NetPay = (decimal)eventData.NetPay,
+            PayRate = (decimal)eventData.PayRate,
+            PayType = eventData.PayType ?? string.Empty,
+            TotalHoursWorked = (decimal)eventData.TotalHoursWorked,
+            PayPeriodStart = eventData.PayPeriodStart ?? string.Empty,
+            PayPeriodEnd = eventData.PayPeriodEnd ?? string.Empty,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        await _payAttributesRepository.UpsertAsync(payAttributes);
+        _logger.LogInformation("Upserted pay attributes for employee {EmployeeId}, period {PayPeriodNumber}, netPay={NetPay}",
+            employeeId, eventData.PayPeriodNumber, eventData.NetPay);
+
+        // Notify GraphQL subscribers
+        var employee = await _repository.GetByIdAsync(employeeId);
+        if (employee != null)
+        {
+            employee.PayAttributes = payAttributes;
+            await _subscriptionPublisher.PublishPayAttributesChangeAsync(employee);
+        }
     }
 }
 
@@ -141,4 +200,25 @@ public class DomainEventInfo
     public Guid EventId { get; set; }
     public DateTime OccurredOn { get; set; }
     public string EventType { get; set; } = string.Empty;
+}
+
+public class NetPayEventPayload
+{
+    public string EmployeeId { get; set; } = string.Empty;
+    public long PayPeriodNumber { get; set; }
+    public double GrossPay { get; set; }
+    public double FederalTax { get; set; }
+    public double StateTax { get; set; }
+    public double AdditionalFederalWithholding { get; set; }
+    public double AdditionalStateWithholding { get; set; }
+    public double TotalTax { get; set; }
+    public double TotalFixedDeductions { get; set; }
+    public double TotalPercentDeductions { get; set; }
+    public double TotalDeductions { get; set; }
+    public double NetPay { get; set; }
+    public double PayRate { get; set; }
+    public string? PayType { get; set; }
+    public double TotalHoursWorked { get; set; }
+    public string? PayPeriodStart { get; set; }
+    public string? PayPeriodEnd { get; set; }
 }

@@ -29,6 +29,9 @@ builder.Services.AddControllers(options =>
         .OfType<Microsoft.AspNetCore.Mvc.Formatters.SystemTextJsonInputFormatter>()
         .First();
     jsonFormatter.SupportedMediaTypes.Add("text/plain");
+    // Raw Kafka messages (e.g. from NetPayProcessor) arrive via Dapr with
+    // datacontenttype=application/octet-stream since no content-type header is set.
+    jsonFormatter.SupportedMediaTypes.Add("application/octet-stream");
 }).AddDapr();
 builder.Services.AddDaprClient();
 
@@ -39,6 +42,7 @@ builder.Services.AddDbContext<ListenerDbContext>(options =>
 
 // Repositories and services
 builder.Services.AddScoped<IEmployeeRecordRepository, EmployeeRecordRepository>();
+builder.Services.AddScoped<IEmployeePayAttributesRepository, EmployeePayAttributesRepository>();
 builder.Services.AddScoped<EventProcessor>();
 builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher>();
 
@@ -71,6 +75,23 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.UseCors();
+
+// Capture raw body for employee-net-pay endpoint BEFORE UseCloudEvents() consumes it.
+// Raw Kafka messages (non-CloudEvent) get wrapped by Dapr, but the CloudEvents middleware
+// produces an empty body for them. This middleware preserves the original body.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api/eventsubscription/employee-net-pay"))
+    {
+        context.Request.EnableBuffering();
+        using var reader = new StreamReader(context.Request.Body, leaveOpen: true);
+        var body = await reader.ReadToEndAsync();
+        context.Request.Body.Position = 0;
+        context.Items["RawBody"] = body;
+    }
+    await next();
+});
+
 app.UseRouting();
 app.UseWebSockets();
 app.UseCloudEvents();

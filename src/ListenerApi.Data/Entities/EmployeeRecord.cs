@@ -19,4 +19,7 @@ public class EmployeeRecord
     // Audit
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    // Navigation
+    public EmployeePayAttributes? PayAttributes { get; set; }
 }

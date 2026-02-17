@@ -2,10 +2,76 @@ import { useQuery, useMutation } from 'urql';
 import { GET_ALL_EMPLOYEES, DELETE_ALL_EMPLOYEES } from '../graphql/queries';
 import { useState } from 'react';
 
+function PayDetailModal({ employee, onClose }) {
+  const pa = employee.payAttributes;
+  if (!pa) return null;
+
+  const formatCurrency = (val) => `$${Number(val).toFixed(2)}`;
+  const payTypeLabel = pa.payType === '2' || pa.payType === 'Salary' ? 'Salary' : 'Hourly';
+
+  return (
+    <div className="confirm-modal-overlay" onClick={onClose}>
+      <div className="pay-detail-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="pay-detail-header">
+          <h3>Pay Details - {employee.firstName} {employee.lastName}</h3>
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+        <div className="pay-detail-period">
+          Pay Period: {pa.payPeriodStart} to {pa.payPeriodEnd}
+        </div>
+        <div className="pay-detail-grid">
+          <div className="pay-detail-label">Pay Rate</div>
+          <div className="pay-detail-value">{formatCurrency(pa.payRate)} ({payTypeLabel})</div>
+
+          <div className="pay-detail-label">Hours Worked</div>
+          <div className="pay-detail-value">{Number(pa.totalHoursWorked).toFixed(2)}</div>
+
+          <div className="pay-detail-label">Gross Pay</div>
+          <div className="pay-detail-value pay-detail-gross">{formatCurrency(pa.grossPay)}</div>
+
+          <div className="pay-detail-separator" />
+
+          <div className="pay-detail-label">Federal Tax</div>
+          <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(pa.federalTax)}</div>
+
+          <div className="pay-detail-label">State Tax</div>
+          <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(pa.stateTax)}</div>
+
+          <div className="pay-detail-label">Addl. Federal Withholding</div>
+          <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(pa.additionalFederalWithholding)}</div>
+
+          <div className="pay-detail-label">Addl. State Withholding</div>
+          <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(pa.additionalStateWithholding)}</div>
+
+          <div className="pay-detail-label"><strong>Total Tax</strong></div>
+          <div className="pay-detail-value pay-detail-deduction"><strong>-{formatCurrency(pa.totalTax)}</strong></div>
+
+          <div className="pay-detail-separator" />
+
+          <div className="pay-detail-label">Fixed Deductions</div>
+          <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(pa.totalFixedDeductions)}</div>
+
+          <div className="pay-detail-label">Percent Deductions</div>
+          <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(pa.totalPercentDeductions)}</div>
+
+          <div className="pay-detail-label"><strong>Total Deductions</strong></div>
+          <div className="pay-detail-value pay-detail-deduction"><strong>-{formatCurrency(pa.totalDeductions)}</strong></div>
+
+          <div className="pay-detail-separator" />
+
+          <div className="pay-detail-label pay-detail-net-label">Net Pay</div>
+          <div className="pay-detail-value pay-detail-net">{formatCurrency(pa.netPay)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function EmployeeList() {
   const [result, reexecuteQuery] = useQuery({ query: GET_ALL_EMPLOYEES });
   const [deleteResult, deleteAllEmployees] = useMutation(DELETE_ALL_EMPLOYEES);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [selectedEmployee, setSelectedEmployee] = useState(null);
 
   const { data, fetching, error } = result;
 
@@ -64,6 +130,13 @@ export default function EmployeeList() {
         </div>
       )}
 
+      {selectedEmployee && (
+        <PayDetailModal
+          employee={selectedEmployee}
+          onClose={() => setSelectedEmployee(null)}
+        />
+      )}
+
       {deleteResult.data && (
         <div className="success-message">
           {deleteResult.data.deleteAllEmployees.message}
@@ -91,6 +164,7 @@ export default function EmployeeList() {
                   <th>Email</th>
                   <th>Pay Type</th>
                   <th>Pay Rate</th>
+                  <th>Net Pay</th>
                   <th>Status</th>
                   <th>Last Event</th>
                   <th>Updated</th>
@@ -109,6 +183,14 @@ export default function EmployeeList() {
                       {employee.payType === 'Salary' || employee.payType === '2'
                         ? ` (${employee.payPeriodHours ?? 40} hrs/pp)`
                         : ''}
+                    </td>
+                    <td
+                      className={`pay-rate net-pay-cell${employee.payAttributes ? ' clickable' : ''}`}
+                      onClick={() => employee.payAttributes && setSelectedEmployee(employee)}
+                    >
+                      {employee.payAttributes
+                        ? `$${Number(employee.payAttributes.netPay).toFixed(2)}`
+                        : '\u2014'}
                     </td>
                     <td>
                       <span className={`status-badge ${employee.isActive ? 'active' : 'inactive'}`}>
