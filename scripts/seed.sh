@@ -1,7 +1,24 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
-apk add --no-cache jq > /dev/null 2>&1
+# Minimal jq replacement using python3 (cp-kafka image has python3 but not jq)
+jq() {
+  local expr=""
+  if [ "$1" = "-r" ]; then shift; fi
+  expr="$1"
+  python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+path = sys.argv[1]
+if path.startswith('.[].'):
+    field = path[4:]
+    for item in data:
+        print(item.get(field, ''))
+elif path.startswith('.'):
+    field = path[1:]
+    print(data.get(field, ''))
+" "$expr"
+}
 
 API="http://payroll-api:80/api"
 LISTENER="http://listener-api:80"
@@ -32,22 +49,138 @@ api_delete() {
 
 # ── 1. Clean slate ──────────────────────────────────────────────────────────
 
-log "Clearing existing data..."
+log "Installing database client packages..."
+python3 -m pip install --quiet --break-system-packages pymongo mysql-connector-python 2>/dev/null \
+  || python3 -m pip install --quiet pymongo mysql-connector-python 2>/dev/null \
+  || fail "Could not install Python database packages (pymongo, mysql-connector-python)"
 
-# Delete all employees from the payroll API (deactivates them)
-existing=$(curl -sf "$API/employees") || fail "GET employees failed"
-ids=$(echo "$existing" | jq -r '.[].id')
-for id in $ids; do
-  log "  Deleting employee $id"
-  api_delete "$API/employees/$id"
-done
+# 1a. Clear MongoDB
+log "Clearing MongoDB (payroll_db)..."
+python3 << 'PYEOF'
+from pymongo import MongoClient
+client = MongoClient('mongodb://mongodb:27017/?replicaSet=rs0&directConnection=true')
+db = client['payroll_db']
+collections = db.list_collection_names()
+if collections:
+    for col in collections:
+        db.drop_collection(col)
+        print(f"  Dropped collection: {col}")
+else:
+    print("  No collections to drop")
+client.close()
+PYEOF
 
-# NOTE: We intentionally do NOT clear the ListenerApi MySQL read model here.
-# Clearing it wipes idempotency markers (LastEventTimestamp), causing Kafka
-# event replay to re-create ghost records. The listener will naturally process
-# the delete events (marking old records inactive) and create events (adding
-# the new active employees). For a truly clean listener, run:
-#   docker-compose down -v && docker-compose up -d
+# 1b. Clear MySQL
+log "Clearing MySQL (listener_db)..."
+python3 << 'PYEOF'
+import mysql.connector
+conn = mysql.connector.connect(
+    host='mysql', database='listener_db',
+    user='listener_user', password='listener_password'
+)
+cursor = conn.cursor()
+try:
+    cursor.execute('DELETE FROM EmployeeRecords')
+    conn.commit()
+    print(f"  Deleted {cursor.rowcount} rows from EmployeeRecords")
+except mysql.connector.errors.ProgrammingError:
+    print("  EmployeeRecords table does not exist yet, skipping")
+cursor.close()
+conn.close()
+PYEOF
+
+# 1c. Clear all Kafka topics (except internal __ topics)
+# Non-compacted topics are truncated via kafka-delete-records.
+# Compacted topics (cleanup.policy=compact without delete) don't support
+# offset-based deletion, so they are deleted and recreated instead.
+log "Clearing Kafka topics..."
+python3 << 'PYEOF'
+import subprocess, json, re
+
+BOOTSTRAP = 'kafka:9092'
+
+result = subprocess.run(
+    ['kafka-topics', '--list', '--bootstrap-server', BOOTSTRAP],
+    capture_output=True, text=True
+)
+topics = [t.strip() for t in result.stdout.strip().split('\n')
+          if t.strip() and not t.strip().startswith('__')]
+
+if not topics:
+    print("  No topics to process")
+    exit(0)
+
+truncatable = []   # (topic, partitions) — use kafka-delete-records
+compacted = []     # (topic, partitions) — delete and recreate
+
+for topic in topics:
+    # Get partition count
+    desc = subprocess.run(
+        ['kafka-topics', '--describe', '--topic', topic, '--bootstrap-server', BOOTSTRAP],
+        capture_output=True, text=True
+    )
+    part_count = sum(1 for line in desc.stdout.split('\n')
+                     if 'Partition:' in line and line.startswith('\t'))
+
+    # Get cleanup.policy from dynamic topic config
+    cfg = subprocess.run(
+        ['kafka-configs', '--describe', '--entity-type', 'topics',
+         '--entity-name', topic, '--bootstrap-server', BOOTSTRAP],
+        capture_output=True, text=True
+    )
+    is_compact_only = False
+    for line in cfg.stdout.split('\n'):
+        m = re.search(r'cleanup\.policy=(\S+)', line)
+        if m:
+            policy = m.group(1)
+            is_compact_only = 'compact' in policy and 'delete' not in policy
+            break
+
+    if is_compact_only:
+        compacted.append((topic, part_count))
+    else:
+        truncatable.append((topic, part_count))
+
+# Truncate non-compacted topics via kafka-delete-records
+if truncatable:
+    offsets = []
+    for topic, part_count in truncatable:
+        for p in range(part_count):
+            offsets.append({"topic": topic, "partition": p, "offset": -1})
+    with open('/tmp/offsets.json', 'w') as f:
+        json.dump({"partitions": offsets}, f, indent=2)
+    print(f"  Truncating {len(truncatable)} topics ({len(offsets)} partitions):")
+    for t, _ in sorted(truncatable):
+        print(f"    {t}")
+
+# Delete and recreate compacted topics
+if compacted:
+    print(f"  Deleting and recreating {len(compacted)} compacted topics:")
+    for topic, part_count in sorted(compacted):
+        print(f"    {topic} ({part_count} partitions)")
+        subprocess.run(
+            ['kafka-topics', '--delete', '--topic', topic,
+             '--bootstrap-server', BOOTSTRAP],
+            capture_output=True
+        )
+        subprocess.run(
+            ['kafka-topics', '--create', '--topic', topic,
+             '--partitions', str(part_count), '--replication-factor', '1',
+             '--config', 'cleanup.policy=compact',
+             '--bootstrap-server', BOOTSTRAP],
+            capture_output=True
+        )
+
+# Flag file so the outer shell knows compacted topics were recreated
+if compacted:
+    with open('/tmp/compacted_cleared', 'w') as f:
+        f.write('1')
+PYEOF
+
+if [ -f /tmp/offsets.json ]; then
+  kafka-delete-records --bootstrap-server kafka:9092 --offset-json-file /tmp/offsets.json 2>/dev/null \
+    || log "  (some topics may not exist yet, skipping)"
+fi
 
 log "Clean slate complete."
 
@@ -318,6 +451,11 @@ log "  5 employees created"
 log "  40 time entries created (20 each for Sarah Johnson & Emily Brown)"
 log "  5 tax records created"
 log "  7 deductions created"
+log ""
+if [ -f /tmp/compacted_cleared ]; then
+  log "Compacted Kafka topics were recreated — restart stream processors:"
+  log "  docker-compose restart ksqldb-init net-pay-processor"
+fi
 log ""
 log "Verify with:"
 log "  curl http://localhost:5000/api/employees"
