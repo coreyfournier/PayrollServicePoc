@@ -64,7 +64,7 @@ services:
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic deduction-events
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-gross-pay
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-net-pay
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
 
       echo 'Topics created successfully:'
       kafka-topics --list --bootstrap-server kafka:9092
@@ -383,7 +383,7 @@ services:
 
   # Seed script — run with: docker-compose up seed
   seed:
-    image: alpine/curl:latest
+    image: confluentinc/cp-kafka:7.5.0
     container_name: seed
     depends_on:
       payroll-api:
@@ -392,7 +392,7 @@ services:
         condition: service_healthy
     volumes:
       - ./scripts/seed.sh:/seed.sh
-    entrypoint: ["sh", "/seed.sh"]
+    entrypoint: ["bash", "/seed.sh"]
     networks:
       - payroll-network
 

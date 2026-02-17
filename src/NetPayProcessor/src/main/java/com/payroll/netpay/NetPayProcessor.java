@@ -12,6 +12,10 @@ import org.apache.kafka.streams.processor.api.Record;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -37,6 +41,10 @@ public class NetPayProcessor implements Processor<String, String, String, String
     static final ConcurrentHashMap<String, String> grossPayStore = new ConcurrentHashMap<>();
     static final ConcurrentHashMap<String, String> taxConfigStore = new ConcurrentHashMap<>();
     static final ConcurrentHashMap<String, String> deductionStore = new ConcurrentHashMap<>();
+    // Tracks deactivated employees so late-arriving gross pay events emit tombstones instead of data.
+    // Handles the replay race condition where employee-gross-pay events arrive after the deactivation.
+    // Cleared when an employee.created event re-uses the same ID (won't happen with GUIDs, but safe).
+    static final Set<String> deactivatedEmployees = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     private final String sourceName;
     private ProcessorContext<String, String> context;
@@ -76,6 +84,18 @@ public class NetPayProcessor implements Processor<String, String, String, String
         String employeeId = keyNode.get("EMPLOYEE_ID").asText();
         long payPeriodNumber = keyNode.get("PAY_PERIOD_NUMBER").asLong();
 
+        // If this employee was deactivated, emit a tombstone instead of net pay
+        if (deactivatedEmployees.contains(employeeId)) {
+            String outputKey = mapper.writeValueAsString(
+                mapper.createObjectNode()
+                    .put("employeeId", employeeId)
+                    .put("payPeriodNumber", payPeriodNumber)
+            );
+            context.forward(new Record<>(outputKey, null, System.currentTimeMillis()));
+            log.info("Gross pay skipped (deactivated): employee={}, period={}, tombstone emitted", employeeId, payPeriodNumber);
+            return;
+        }
+
         GrossPay gp = new GrossPay();
         gp.setEmployeeId(employeeId);
         gp.setPayPeriodNumber(payPeriodNumber);
@@ -112,12 +132,55 @@ public class NetPayProcessor implements Processor<String, String, String, String
         if (!domainEvents.isArray() || domainEvents.isEmpty()) return;
         String eventType = domainEvents.get(0).path("EventType").asText("");
 
-        if (eventType.startsWith("taxinfo.")) {
+        if ("employee.created".equals(eventType)) {
+            // No-op here. The pre-scan already built the correct deactivated set from
+            // the full event history. Removing from the set during topology replay would
+            // undo the pre-scan's work (old employee.created events arrive before their
+            // deactivation events due to cross-partition ordering). New employees use
+            // fresh GUIDs and are never in the deactivated set, so no removal needed.
+        } else if ("employee.deactivated".equals(eventType)) {
+            handleEmployeeDeactivated(data);
+        } else if (eventType.startsWith("taxinfo.")) {
             handleTaxInfoEvent(data);
         } else if (eventType.startsWith("deduction.")) {
             handleDeductionEvent(data, eventType);
         }
-        // Ignore employee.* and timeentry.* — those are handled by gross pay
+        // employee.created/updated and timeentry.* are handled by gross pay
+    }
+
+    private void handleEmployeeDeactivated(JsonNode data) throws Exception {
+        String employeeId = data.path("Id").asText(null);
+        if (employeeId == null) return;
+
+        // Mark as deactivated so late-arriving gross pay events also emit tombstones
+        deactivatedEmployees.add(employeeId);
+
+        // Find all pay periods for this employee in the gross pay store
+        List<String> keysToRemove = new ArrayList<>();
+        for (String key : grossPayStore.keySet()) {
+            if (key.startsWith(employeeId + ":")) {
+                keysToRemove.add(key);
+            }
+        }
+
+        // Emit tombstones (null value) for each pay period — removes rows from ksqlDB tables
+        for (String key : keysToRemove) {
+            long payPeriodNumber = Long.parseLong(key.substring(key.indexOf(':') + 1));
+            String outputKey = mapper.writeValueAsString(
+                mapper.createObjectNode()
+                    .put("employeeId", employeeId)
+                    .put("payPeriodNumber", payPeriodNumber)
+            );
+            context.forward(new Record<>(outputKey, null, System.currentTimeMillis()));
+            grossPayStore.remove(key);
+        }
+
+        // Clean up other stores
+        taxConfigStore.remove(employeeId);
+        deductionStore.remove(employeeId);
+
+        log.info("Employee deactivated: employee={}, tombstones emitted for {} pay periods",
+            employeeId, keysToRemove.size());
     }
 
     private void handleTaxInfoEvent(JsonNode data) throws Exception {

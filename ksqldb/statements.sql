@@ -19,11 +19,15 @@
 -- ============================================================
 
 -- Current / new objects
-DROP TABLE IF EXISTS EMPLOYEE_NET_PAY_BY_PERIOD DELETE TOPIC;
+DROP TABLE IF EXISTS EMPLOYEE_NET_PAY_BY_PERIOD;
+-- Legacy: previous versions used a stream + aggregation table
 DROP STREAM IF EXISTS EMPLOYEE_NET_PAY;
 DROP TABLE IF EXISTS EMPLOYEE_GROSS_PAY_BY_PERIOD DELETE TOPIC;
+DROP TABLE IF EXISTS EMPLOYEE_GROSS_PAY DELETE TOPIC;
 DROP STREAM IF EXISTS GROSS_PAY_EVENTS DELETE TOPIC;
+DROP TABLE IF EXISTS EMPLOYEE_HOURS_BY_PERIOD DELETE TOPIC;
 DROP TABLE IF EXISTS PAY_PERIOD_HOURS_BY_PERIOD DELETE TOPIC;
+DROP TABLE IF EXISTS PAY_PERIOD_HOURS DELETE TOPIC;
 DROP STREAM IF EXISTS TIME_ENTRY_EVENTS DELETE TOPIC;
 
 -- Legacy objects from previous schema versions
@@ -85,7 +89,7 @@ CREATE STREAM TIME_ENTRY_EVENTS AS
 -- so edits replace the previous hours instead of adding to them.
 -- REDUCE(MAP_VALUES(...)) then sums the deduplicated hours.
 -- ============================================================
-CREATE TABLE PAY_PERIOD_HOURS_BY_PERIOD WITH (
+CREATE TABLE EMPLOYEE_HOURS_BY_PERIOD WITH (
   KAFKA_TOPIC='payperiod-hours-changed',
   KEY_FORMAT='JSON',
   VALUE_FORMAT='JSON',
@@ -167,7 +171,7 @@ CREATE STREAM GROSS_PAY_EVENTS AS
 -- PAY_RATE / PAY_TYPE: LATEST_BY_OFFSET(col, true) ignores nulls, so
 -- timeentry events (which have null pay rate) don't overwrite the rate.
 -- TOTAL_HOURS_WORKED: same AS_MAP + COLLECT_LIST + REDUCE dedup pattern
--- as PAY_PERIOD_HOURS_BY_PERIOD — the '__PAY_RATE__' sentinel contributes 0 hours.
+-- as EMPLOYEE_HOURS_BY_PERIOD — the '__PAY_RATE__' sentinel contributes 0 hours.
 -- EFFECTIVE_HOURLY_RATE: for Salary (PayType=2), divides annual rate by
 -- 2080 hours (52 weeks × 40 hrs). For Hourly (PayType=1), rate is $/hour.
 -- GROSS_PAY: EFFECTIVE_HOURLY_RATE × TOTAL_HOURS_WORKED
@@ -237,14 +241,20 @@ CREATE TABLE EMPLOYEE_GROSS_PAY_BY_PERIOD WITH (
   EMIT CHANGES;
 
 -- ============================================================
--- Stream over the employee-net-pay topic (produced by NetPayProcessor)
--- No DELETE TOPIC — preserves the external topic managed by NetPayProcessor.
+-- Source table: employee net pay per pay period
+-- Backed by the compacted employee-net-pay topic (produced by NetPayProcessor).
+-- SOURCE TABLE reads the compacted topic directly — tombstones (null values)
+-- emitted by NetPayProcessor for deactivated employees delete rows automatically.
 -- Key columns match the JSON key: {"employeeId":"...","payPeriodNumber":55}
 -- Value fields are camelCase matching Java NetPayResult serialization.
+-- Queryable as a pull query:
+--   SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD;
+--   SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD
+--     WHERE EMPLOYEEID = '...' AND PAYPERIODNUMBER = 55;
 -- ============================================================
-CREATE STREAM EMPLOYEE_NET_PAY (
-  employeeId VARCHAR KEY,
-  payPeriodNumber BIGINT KEY,
+CREATE SOURCE TABLE EMPLOYEE_NET_PAY_BY_PERIOD (
+  employeeId VARCHAR PRIMARY KEY,
+  payPeriodNumber BIGINT PRIMARY KEY,
   grossPay DOUBLE,
   federalTax DOUBLE,
   stateTax DOUBLE,
@@ -265,43 +275,3 @@ CREATE STREAM EMPLOYEE_NET_PAY (
   KEY_FORMAT='JSON',
   VALUE_FORMAT='JSON'
 );
-
--- ============================================================
--- Materialized table: employee net pay per pay period
--- Tracks the latest net pay breakdown per employee + pay period.
--- Each NetPayProcessor emission replaces the previous state via
--- LATEST_BY_OFFSET, so the table always reflects current net pay.
--- Queryable as a pull query (point lookup):
---   SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD
---     WHERE EMPLOYEEID = '...' AND PAYPERIODNUMBER = 55;
--- Or as a push query:
---   SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD EMIT CHANGES;
--- ============================================================
-CREATE TABLE EMPLOYEE_NET_PAY_BY_PERIOD WITH (
-  KAFKA_TOPIC='employee-net-pay-by-period',
-  KEY_FORMAT='JSON',
-  VALUE_FORMAT='JSON',
-  PARTITIONS=3
-) AS
-  SELECT
-    employeeId,
-    payPeriodNumber,
-    LATEST_BY_OFFSET(grossPay) AS GROSS_PAY,
-    LATEST_BY_OFFSET(federalTax) AS FEDERAL_TAX,
-    LATEST_BY_OFFSET(stateTax) AS STATE_TAX,
-    LATEST_BY_OFFSET(additionalFederalWithholding) AS ADDITIONAL_FEDERAL_WITHHOLDING,
-    LATEST_BY_OFFSET(additionalStateWithholding) AS ADDITIONAL_STATE_WITHHOLDING,
-    LATEST_BY_OFFSET(totalTax) AS TOTAL_TAX,
-    LATEST_BY_OFFSET(totalFixedDeductions) AS TOTAL_FIXED_DEDUCTIONS,
-    LATEST_BY_OFFSET(totalPercentDeductions) AS TOTAL_PERCENT_DEDUCTIONS,
-    LATEST_BY_OFFSET(totalDeductions) AS TOTAL_DEDUCTIONS,
-    LATEST_BY_OFFSET(netPay) AS NET_PAY,
-    LATEST_BY_OFFSET(payRate) AS PAY_RATE,
-    LATEST_BY_OFFSET(payType) AS PAY_TYPE,
-    LATEST_BY_OFFSET(totalHoursWorked) AS TOTAL_HOURS_WORKED,
-    LATEST_BY_OFFSET(payPeriodStart) AS PAY_PERIOD_START,
-    LATEST_BY_OFFSET(payPeriodEnd) AS PAY_PERIOD_END,
-    COUNT(*) AS EVENT_COUNT
-  FROM EMPLOYEE_NET_PAY
-  GROUP BY employeeId, payPeriodNumber
-  EMIT CHANGES;

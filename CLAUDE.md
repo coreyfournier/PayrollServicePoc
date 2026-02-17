@@ -127,7 +127,7 @@ ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-
 employee-events topic
   → EMPLOYEE_EVENTS_RAW stream (raw CloudEvent envelope, data as VARCHAR)
   ├→ TIME_ENTRY_EVENTS stream (filtered for timeentry.clockedout / timeentry.updated)
-  │   → PAY_PERIOD_HOURS_BY_PERIOD table (aggregated per employee + pay period → payperiod-hours-changed topic)
+  │   → EMPLOYEE_HOURS_BY_PERIOD table (aggregated per employee + pay period → payperiod-hours-changed topic)
   └→ GROSS_PAY_EVENTS stream (employee + timeentry events, normalized fields)
       → EMPLOYEE_GROSS_PAY_BY_PERIOD table (rate × hours per employee + pay period → employee-gross-pay topic)
 
