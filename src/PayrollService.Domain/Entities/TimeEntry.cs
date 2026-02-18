@@ -36,4 +36,18 @@ public class TimeEntry : Entity
 
         AddDomainEvent(new EmployeeClockedOutEvent(Id, EmployeeId, ClockIn, ClockOut.Value, HoursWorked));
     }
+
+    public void UpdateTimes(DateTime clockIn, DateTime? clockOut)
+    {
+        if (clockOut.HasValue && clockOut.Value <= clockIn)
+            throw new InvalidOperationException("Clock out must be after clock in.");
+
+        ClockIn = clockIn;
+        ClockOut = clockOut;
+        HoursWorked = clockOut.HasValue
+            ? Math.Round((decimal)(clockOut.Value - clockIn).TotalHours, 2)
+            : 0;
+        SetUpdated();
+        AddDomainEvent(new TimeEntryUpdatedEvent(Id, EmployeeId, ClockIn, ClockOut, HoursWorked));
+    }
 }

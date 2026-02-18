@@ -13,7 +13,8 @@ public record CreateEmployeeCommand(
     string Email,
     PayType PayType,
     decimal PayRate,
-    DateTime HireDate) : IRequest<EmployeeDto>;
+    DateTime HireDate,
+    decimal PayPeriodHours = 40) : IRequest<EmployeeDto>;
 
 public class CreateEmployeeCommandHandler : IRequestHandler<CreateEmployeeCommand, EmployeeDto>
 {
@@ -34,7 +35,8 @@ public class CreateEmployeeCommandHandler : IRequestHandler<CreateEmployeeComman
             request.Email,
             request.PayType,
             request.PayRate,
-            request.HireDate);
+            request.HireDate,
+            request.PayPeriodHours);
 
         var result = await _unitOfWork.ExecuteAsync(
             async () => await _repository.AddAsync(employee, cancellationToken),
@@ -48,6 +50,7 @@ public class CreateEmployeeCommandHandler : IRequestHandler<CreateEmployeeComman
             result.Email,
             result.PayType,
             result.PayRate,
+            result.PayPeriodHours,
             result.HireDate,
             result.IsActive,
             result.CreatedAt,

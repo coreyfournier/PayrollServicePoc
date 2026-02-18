@@ -37,4 +37,11 @@ public class TimeEntriesController : ControllerBase
         var result = await _mediator.Send(new ClockOutCommand(employeeId));
         return Ok(result);
     }
+
+    [HttpPut("{id:guid}")]
+    public async Task<ActionResult<TimeEntryDto>> Update(Guid id, [FromBody] UpdateTimeEntryCommand command)
+    {
+        var result = await _mediator.Send(command with { Id = id });
+        return Ok(result);
+    }
 }

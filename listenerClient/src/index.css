@@ -448,3 +448,91 @@ h1 {
   background: #fee2e2;
   color: #991b1b;
 }
+
+/* Net Pay Cell */
+.net-pay-cell.clickable {
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.net-pay-cell.clickable:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+/* Pay Detail Modal */
+.pay-detail-modal {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: var(--shadow-md);
+}
+
+.pay-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.pay-detail-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pay-detail-period {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+  padding: 8px 12px;
+  background: var(--background);
+  border-radius: var(--radius);
+}
+
+.pay-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 16px;
+  font-size: 14px;
+}
+
+.pay-detail-label {
+  color: var(--text-secondary);
+}
+
+.pay-detail-value {
+  text-align: right;
+  font-family: 'Courier New', monospace;
+  color: var(--text-primary);
+}
+
+.pay-detail-gross {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.pay-detail-deduction {
+  color: var(--danger);
+}
+
+.pay-detail-separator {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.pay-detail-net-label {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.pay-detail-net {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--success);
+}

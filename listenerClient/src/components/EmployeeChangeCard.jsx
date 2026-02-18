@@ -25,6 +25,8 @@ export default function EmployeeChangeCard({ change }) {
         {employee.payRate && (
           <p className="pay-info">
             {employee.payType} - ${employee.payRate}
+            {(employee.payType === 'Salary' || employee.payType === '2') &&
+              ` (${employee.payPeriodHours ?? 40} hrs/pp)`}
           </p>
         )}
       </div>

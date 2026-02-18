@@ -8,10 +8,29 @@ export const EMPLOYEE_CHANGE_SUBSCRIPTION = `
         email
         payType
         payRate
+        payPeriodHours
         isActive
         lastEventType
         lastEventTimestamp
         updatedAt
+        payAttributes {
+          grossPay
+          federalTax
+          stateTax
+          additionalFederalWithholding
+          additionalStateWithholding
+          totalTax
+          totalFixedDeductions
+          totalPercentDeductions
+          totalDeductions
+          netPay
+          payRate
+          payType
+          totalHoursWorked
+          payPeriodStart
+          payPeriodEnd
+          payPeriodNumber
+        }
       }
       changeType
       timestamp

@@ -8,6 +8,7 @@ public class EmployeeRecord
     public string Email { get; set; } = string.Empty;
     public string PayType { get; set; } = string.Empty;
     public decimal? PayRate { get; set; }
+    public decimal PayPeriodHours { get; set; } = 40;
     public bool IsActive { get; set; }
 
     // Idempotency tracking
@@ -18,4 +19,7 @@ public class EmployeeRecord
     // Audit
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    // Navigation
+    public EmployeePayAttributes? PayAttributes { get; set; }
 }

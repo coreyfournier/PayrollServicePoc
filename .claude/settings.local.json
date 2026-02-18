@@ -8,7 +8,10 @@
       "Bash(docker-compose up:*)",
       "Bash(docker ps:*)",
       "Bash(curl:*)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:docs.confluent.io)",
+      "Bash(python -m json.tool:*)",
+      "Bash(docker exec:*)"
     ]
   }
 }

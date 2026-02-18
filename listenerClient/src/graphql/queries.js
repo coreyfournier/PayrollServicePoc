@@ -7,11 +7,30 @@ export const GET_ALL_EMPLOYEES = `
       email
       payType
       payRate
+      payPeriodHours
       isActive
       lastEventType
       lastEventTimestamp
       createdAt
       updatedAt
+      payAttributes {
+        grossPay
+        federalTax
+        stateTax
+        additionalFederalWithholding
+        additionalStateWithholding
+        totalTax
+        totalFixedDeductions
+        totalPercentDeductions
+        totalDeductions
+        netPay
+        payRate
+        payType
+        totalHoursWorked
+        payPeriodStart
+        payPeriodEnd
+        payPeriodNumber
+      }
     }
   }
 `;

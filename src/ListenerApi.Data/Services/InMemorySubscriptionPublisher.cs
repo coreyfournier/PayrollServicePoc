@@ -38,4 +38,25 @@ public class InMemorySubscriptionPublisher : ISubscriptionPublisher
             throw;
         }
     }
+
+    public async Task PublishPayAttributesChangeAsync(EmployeeRecord employee)
+    {
+        try
+        {
+            var change = new EmployeeChange
+            {
+                Employee = employee,
+                ChangeType = "payUpdated",
+                Timestamp = DateTime.UtcNow
+            };
+
+            await _eventSender.SendAsync("EmployeeChanges", change);
+            _logger.LogInformation("Published pay attributes change for {EmployeeId}", employee.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to publish pay attributes change for {EmployeeId}", employee.Id);
+            throw;
+        }
+    }
 }

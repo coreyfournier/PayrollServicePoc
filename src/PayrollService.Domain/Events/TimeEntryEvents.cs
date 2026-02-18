@@ -35,3 +35,22 @@ public class EmployeeClockedOutEvent : DomainEvent
         HoursWorked = hoursWorked;
     }
 }
+
+public class TimeEntryUpdatedEvent : DomainEvent
+{
+    public override string EventType => "timeentry.updated";
+    public Guid TimeEntryId { get; }
+    public Guid EmployeeId { get; }
+    public DateTime ClockInTime { get; }
+    public DateTime? ClockOutTime { get; }
+    public decimal HoursWorked { get; }
+
+    public TimeEntryUpdatedEvent(Guid timeEntryId, Guid employeeId, DateTime clockInTime, DateTime? clockOutTime, decimal hoursWorked)
+    {
+        TimeEntryId = timeEntryId;
+        EmployeeId = employeeId;
+        ClockInTime = clockInTime;
+        ClockOutTime = clockOutTime;
+        HoursWorked = hoursWorked;
+    }
+}

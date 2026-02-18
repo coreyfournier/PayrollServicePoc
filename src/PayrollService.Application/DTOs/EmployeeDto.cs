@@ -9,6 +9,7 @@ public record EmployeeDto(
     string Email,
     PayType PayType,
     decimal PayRate,
+    decimal PayPeriodHours,
     DateTime HireDate,
     bool IsActive,
     DateTime CreatedAt,
@@ -20,11 +21,13 @@ public record CreateEmployeeDto(
     string Email,
     PayType PayType,
     decimal PayRate,
-    DateTime HireDate);
+    DateTime HireDate,
+    decimal PayPeriodHours = 40);
 
 public record UpdateEmployeeDto(
     string FirstName,
     string LastName,
     string Email,
     PayType PayType,
-    decimal PayRate);
+    decimal PayRate,
+    decimal PayPeriodHours = 40);

@@ -12,7 +12,8 @@ public record UpdateEmployeeCommand(
     string LastName,
     string Email,
     PayType PayType,
-    decimal PayRate) : IRequest<EmployeeDto>;
+    decimal PayRate,
+    decimal PayPeriodHours = 40) : IRequest<EmployeeDto>;
 
 public class UpdateEmployeeCommandHandler : IRequestHandler<UpdateEmployeeCommand, EmployeeDto>
 {
@@ -30,7 +31,7 @@ public class UpdateEmployeeCommandHandler : IRequestHandler<UpdateEmployeeComman
         var employee = await _repository.GetByIdAsync(request.Id, cancellationToken)
             ?? throw new KeyNotFoundException($"Employee with ID {request.Id} not found.");
 
-        employee.Update(request.FirstName, request.LastName, request.Email, request.PayType, request.PayRate);
+        employee.Update(request.FirstName, request.LastName, request.Email, request.PayType, request.PayRate, request.PayPeriodHours);
 
         await _unitOfWork.ExecuteAsync(
             async () => await _repository.UpdateAsync(employee, cancellationToken),
@@ -44,6 +45,7 @@ public class UpdateEmployeeCommandHandler : IRequestHandler<UpdateEmployeeComman
             employee.Email,
             employee.PayType,
             employee.PayRate,
+            employee.PayPeriodHours,
             employee.HireDate,
             employee.IsActive,
             employee.CreatedAt,

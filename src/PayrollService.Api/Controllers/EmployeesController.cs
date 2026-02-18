@@ -42,7 +42,8 @@ public class EmployeesController : ControllerBase
             dto.Email,
             dto.PayType,
             dto.PayRate,
-            dto.HireDate);
+            dto.HireDate,
+            dto.PayPeriodHours);
 
         var result = await _mediator.Send(command);
         return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
@@ -57,7 +58,8 @@ public class EmployeesController : ControllerBase
             dto.LastName,
             dto.Email,
             dto.PayType,
-            dto.PayRate);
+            dto.PayRate,
+            dto.PayPeriodHours);
 
         var result = await _mediator.Send(command);
         return Ok(result);

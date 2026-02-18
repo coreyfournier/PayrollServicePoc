@@ -20,6 +20,7 @@ export const deleteEmployee = (id) => api.delete(`/employees/${id}`);
 export const getTimeEntries = (employeeId) => api.get(`/timeentries/employee/${employeeId}`);
 export const clockIn = (employeeId) => api.post(`/timeentries/clock-in/${employeeId}`);
 export const clockOut = (employeeId) => api.post(`/timeentries/clock-out/${employeeId}`);
+export const updateTimeEntry = (id, data) => api.put(`/timeentries/${id}`, data);
 
 // Tax Information
 export const getTaxInfo = (employeeId) => api.get(`/taxinformation/employee/${employeeId}`);

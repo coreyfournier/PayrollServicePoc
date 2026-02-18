@@ -19,6 +19,85 @@ namespace ListenerApi.Data.Migrations
                 .HasAnnotation("ProductVersion", "7.0.15")
                 .HasAnnotation("Relational:MaxIdentifierLength", 64);
 
+            modelBuilder.Entity("ListenerApi.Data.Entities.EmployeePayAttributes", b =>
+                {
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("AdditionalFederalWithholding")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("AdditionalStateWithholding")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("FederalTax")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("GrossPay")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("NetPay")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("PayPeriodEnd")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<long>("PayPeriodNumber")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("PayPeriodStart")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<decimal>("PayRate")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("PayType")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("varchar(10)");
+
+                    b.Property<decimal>("StateTax")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("TotalDeductions")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("TotalFixedDeductions")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("TotalHoursWorked")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("TotalPercentDeductions")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("TotalTax")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.HasKey("EmployeeId");
+
+                    b.ToTable("EmployeePayAttributes");
+                });
+
             modelBuilder.Entity("ListenerApi.Data.Entities.EmployeeRecord", b =>
                 {
                     b.Property<Guid>("Id")
@@ -56,6 +135,12 @@ namespace ListenerApi.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("varchar(100)");
 
+                    b.Property<decimal>("PayPeriodHours")
+                        .ValueGeneratedOnAdd()
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)")
+                        .HasDefaultValue(40m);
+
                     b.Property<decimal?>("PayRate")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -74,6 +159,22 @@ namespace ListenerApi.Data.Migrations
                     b.HasIndex("LastEventTimestamp");
 
                     b.ToTable("EmployeeRecords");
+                });
+
+            modelBuilder.Entity("ListenerApi.Data.Entities.EmployeePayAttributes", b =>
+                {
+                    b.HasOne("ListenerApi.Data.Entities.EmployeeRecord", "Employee")
+                        .WithOne("PayAttributes")
+                        .HasForeignKey("ListenerApi.Data.Entities.EmployeePayAttributes", "EmployeeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+                });
+
+            modelBuilder.Entity("ListenerApi.Data.Entities.EmployeeRecord", b =>
+                {
+                    b.Navigation("PayAttributes");
                 });
 #pragma warning restore 612, 618
         }
