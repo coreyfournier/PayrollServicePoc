@@ -6,12 +6,10 @@ An event-driven microservices proof of concept built with C# ASP.NET Core, demon
 
 Two independent backend APIs communicate via Kafka events:
 
-<<<<<<< HEAD
 - **Payroll API** (.NET 8.0): REST API following DDD + CQRS patterns with MediatR. Uses Microsoft Orleans for stateful virtual actor grains with MongoDB persistence. Publishes domain events directly to Kafka via Confluent.Kafka.
 - **Listener API** (.NET 7.0): Subscribes to Kafka employee events via a Dapr sidecar. Persists events to MySQL using EF Core with idempotent upserts. Exposes a GraphQL API (HotChocolate) with real-time WebSocket subscriptions.
 - **Frontend** (React 19 + Vite): Payroll management UI for employee CRUD, time clock, tax info, and deductions.
 - **Listener Client** (React 19 + Vite): Real-time employee change stream viewer using GraphQL subscriptions via URQL + graphql-ws.
-=======
 - **Domain Layer**: Contains entities, value objects, domain events, and repository interfaces
 - **Application Layer**: Contains DTOs, commands, queries, and handlers using MediatR
 - **Infrastructure Layer**: Contains MongoDB repositories, Dapr event publishing, and data seeding
@@ -41,7 +39,7 @@ Repository `AddAsync` methods use `ReplaceOneAsync` with `IsUpsert = true` so th
 - **Deductions**: Various payroll deductions (health, dental, 401k, etc.)
 - **Event-Driven**: All data changes trigger domain events published to Kafka via Dapr
 - **Transactional Consistency**: Dapr state store is the authoritative write path — entity state and outbox events are written atomically. MongoDB collections serve as a best-effort read model updated after the Dapr transaction succeeds.
->>>>>>> DaprWith2Pc
+
 
 ## Prerequisites
 
@@ -87,8 +85,6 @@ The **Listener Client** (`listenerClient/`) is a React + Vite frontend that conn
 Together, they demonstrate an end-to-end event-driven pipeline: REST API mutation → domain event → Kafka → Dapr subscription → MySQL projection → GraphQL subscription → real-time UI update.
 
 ## Services
-
-<<<<<<< HEAD
 | Service | Container | Port | Description |
 |---------|-----------|------|-------------|
 | payroll-api | payroll-api | 5000 | REST API with Orleans silo (.NET 8.0) |
@@ -103,20 +99,7 @@ Together, they demonstrate an end-to-end event-driven pipeline: REST API mutatio
 | mongodb | mongodb | 27017 | Payroll data + Orleans grain state (Mongo 7.0, replica set) |
 | mysql | mysql | 3306 | Listener API event store (MySQL 8.0) |
 | zipkin | zipkin | 9411 | Distributed tracing |
-=======
-| Service | Port | Description |
-|---------|------|-------------|
-| payroll-api | 5000 | Payroll API Service |
-| listener-api | 5001 | GraphQL Listener API |
-| frontend | 3000 | React frontend (REST client) |
-| listener-client | 3001 | React frontend (GraphQL subscription client) |
-| mongodb | 27017 | MongoDB Database |
-| mysql | 3306 | MySQL Database (Listener API) |
-| kafka | 9092/29092 | Kafka Message Broker |
-| kafka-ui | 8080 | Kafka monitoring UI |
-| zookeeper | 2181 | Zookeeper (Kafka dependency) |
-| zipkin | 9411 | Distributed Tracing |
->>>>>>> DaprWith2Pc
+
 
 ## Payroll API Endpoints
 
@@ -159,13 +142,7 @@ Endpoint: `http://localhost:5001/graphql`
 
 ## Kafka Topics
 
-<<<<<<< HEAD
-Created automatically on startup (3 partitions each):
-- `employee-events` - Employee create/update/deactivate events
-- `timeentry-events` - Clock in/out events
-- `taxinfo-events` - Tax information changes
-- `deduction-events` - Deduction changes
-=======
+
 The following topics are created by the `kafka-init` container on startup:
 
 | Topic | Producer | Description |
@@ -205,7 +182,7 @@ ksqlDB processes the `employee-events` Kafka topic through a pipeline of streams
 | `EMPLOYEE_HOURS_BY_PERIOD` | Aggregation | `payperiod-hours-changed` | Total hours per employee per pay period. Uses `AS_MAP(COLLECT_LIST(id), COLLECT_LIST(hours))` to deduplicate by time entry ID (last value wins), then `REDUCE(MAP_VALUES(...))` sums the latest hours. This prevents double-counting when time entries are edited |
 | `EMPLOYEE_GROSS_PAY_BY_PERIOD` | Aggregation | `employee-gross-pay` | Gross pay per employee per pay period. Tracks pay rate via `LATEST_BY_OFFSET(PAY_RATE, true)` (ignores nulls from time entry events). For hourly employees (`PayType=1`): rate x summed hours. For salaried employees (`PayType=2`): annual rate / 2080 x `PayPeriodHours` |
 | `EMPLOYEE_NET_PAY_BY_PERIOD` | Source | `employee-net-pay` | Read-only materialized view over the compacted `employee-net-pay` topic produced by NetPayProcessor. Queryable via pull queries. Tombstones from NetPayProcessor automatically delete rows for deactivated employees |
->>>>>>> DaprWith2Pc
+
 
 ## Seed Data
 
