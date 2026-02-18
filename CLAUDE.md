@@ -136,8 +136,7 @@ employee-events topic
       → EMPLOYEE_GROSS_PAY_BY_PERIOD table (rate × hours per employee + pay period → employee-gross-pay topic)
 
 employee-net-pay topic (produced by NetPayProcessor)
-  → EMPLOYEE_NET_PAY stream (keyed by employeeId + payPeriodNumber)
-      → EMPLOYEE_NET_PAY_BY_PERIOD table (latest net pay per employee + pay period → employee-net-pay-by-period topic)
+  → EMPLOYEE_NET_PAY_BY_PERIOD source table (keyed by EMPLOYEE_ID + PAY_PERIOD_NUMBER)
 ```
 
 **Key design decisions:**
@@ -205,13 +204,13 @@ When a **deduction event** arrives: update store → look up latest gross pay fo
 - **Inactive** (`isActive=false`): contribute $0 (kept in map for reactivation)
 
 **`employee-net-pay` topic schema:**
-- Key (JSON): `{"employeeId": "...", "payPeriodNumber": 55}`
-- Value (JSON): `{"employeeId": "...", "payPeriodNumber": 55, "grossPay": 4440.0, "federalTax": 170.77, "stateTax": 0.0, "additionalFederalWithholding": 50.0, "additionalStateWithholding": 25.0, "totalTax": 245.77, "totalFixedDeductions": 225.0, "totalPercentDeductions": 0.0, "totalDeductions": 225.0, "netPay": 3969.23, "payRate": 28.5, "payType": "1", "totalHoursWorked": 155.75, "payPeriodStart": "2026-02-09T00:00:00", "payPeriodEnd": "2026-02-23T00:00:00"}`
+- Key (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55}`
+- Value (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55, "GROSS_PAY": 4440.0, "FEDERAL_TAX": 170.77, "STATE_TAX": 0.0, "ADDITIONAL_FEDERAL_WITHHOLDING": 50.0, "ADDITIONAL_STATE_WITHHOLDING": 25.0, "TOTAL_TAX": 245.77, "TOTAL_FIXED_DEDUCTIONS": 225.0, "TOTAL_PERCENT_DEDUCTIONS": 0.0, "TOTAL_DEDUCTIONS": 225.0, "NET_PAY": 3969.23, "PAY_RATE": 28.5, "PAY_TYPE": "1", "TOTAL_HOURS_WORKED": 155.75, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00"}`
 
-**`employee-net-pay-by-period` topic schema (ksqlDB materialized view):**
-- Key (JSON): `{"EMPLOYEEID": "...", "PAYPERIODNUMBER": 55}`
-- Value (JSON): `{"GROSS_PAY": 4440.0, "FEDERAL_TAX": 170.77, "STATE_TAX": 0.0, "ADDITIONAL_FEDERAL_WITHHOLDING": 50.0, "ADDITIONAL_STATE_WITHHOLDING": 25.0, "TOTAL_TAX": 245.77, "TOTAL_FIXED_DEDUCTIONS": 225.0, "TOTAL_PERCENT_DEDUCTIONS": 0.0, "TOTAL_DEDUCTIONS": 225.0, "NET_PAY": 3969.23, "PAY_RATE": 28.5, "PAY_TYPE": "1", "TOTAL_HOURS_WORKED": 155.75, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00", "EVENT_COUNT": 5}`
-- Queryable via pull query: `SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD WHERE EMPLOYEEID = '...' AND PAYPERIODNUMBER = 55;`
+**`employee-net-pay-by-period` topic schema (ksqlDB SOURCE TABLE):**
+- Key (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55}`
+- Value (JSON): `{"GROSS_PAY": 4440.0, "FEDERAL_TAX": 170.77, "STATE_TAX": 0.0, "ADDITIONAL_FEDERAL_WITHHOLDING": 50.0, "ADDITIONAL_STATE_WITHHOLDING": 25.0, "TOTAL_TAX": 245.77, "TOTAL_FIXED_DEDUCTIONS": 225.0, "TOTAL_PERCENT_DEDUCTIONS": 0.0, "TOTAL_DEDUCTIONS": 225.0, "NET_PAY": 3969.23, "PAY_RATE": 28.5, "PAY_TYPE": "1", "TOTAL_HOURS_WORKED": 155.75, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00"}`
+- Queryable via pull query: `SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD WHERE EMPLOYEE_ID = '...' AND PAY_PERIOD_NUMBER = 55;`
 
 **Key files:**
 - `src/NetPayProcessor/pom.xml` — Maven project (kafka-streams, jackson)
@@ -241,4 +240,4 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 
 - Dapr's transactional outbox does not preserve the data payload as a JSON object — it gets stringified. Tracked at https://github.com/dapr/dapr/issues/8130. The ksqlDB pipeline works around this by declaring `data` as VARCHAR and using `EXTRACTJSONFIELD`.
 - The `COLLECT_LIST` in the ksqlDB aggregation grows unboundedly (appends every event). Acceptable for a POC but would need a retention strategy in production.
-- Restarting `ksqldb-init` drops and recreates topics (via `DELETE TOPIC`), which crashes the running `net-pay-processor` with `MissingSourceTopicException`. After an `ksqldb-init` restart, manually restart `net-pay-processor`: `docker restart net-pay-processor`.
+- Restarting `ksqldb-init` drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` to hit `MissingSourceTopicException`. The processor auto-recovers: it detects the error state, waits 30 seconds for topics to be recreated, then restarts its full lifecycle (consumer group reset, pre-scan, topology). No manual intervention needed.

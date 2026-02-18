@@ -245,31 +245,31 @@ CREATE TABLE EMPLOYEE_GROSS_PAY_BY_PERIOD WITH (
 -- Backed by the compacted employee-net-pay topic (produced by NetPayProcessor).
 -- SOURCE TABLE reads the compacted topic directly — tombstones (null values)
 -- emitted by NetPayProcessor for deactivated employees delete rows automatically.
--- Key columns match the JSON key: {"employeeId":"...","payPeriodNumber":55}
--- Value fields are camelCase matching Java NetPayResult serialization.
+-- Key columns match the JSON key: {"EMPLOYEE_ID":"...","PAY_PERIOD_NUMBER":55}
+-- Value fields are UPPER_SNAKE_CASE matching Java NetPayResult serialization.
 -- Queryable as a pull query:
 --   SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD;
 --   SELECT * FROM EMPLOYEE_NET_PAY_BY_PERIOD
---     WHERE EMPLOYEEID = '...' AND PAYPERIODNUMBER = 55;
+--     WHERE EMPLOYEE_ID = '...' AND PAY_PERIOD_NUMBER = 55;
 -- ============================================================
 CREATE SOURCE TABLE EMPLOYEE_NET_PAY_BY_PERIOD (
-  employeeId VARCHAR PRIMARY KEY,
-  payPeriodNumber BIGINT PRIMARY KEY,
-  grossPay DOUBLE,
-  federalTax DOUBLE,
-  stateTax DOUBLE,
-  additionalFederalWithholding DOUBLE,
-  additionalStateWithholding DOUBLE,
-  totalTax DOUBLE,
-  totalFixedDeductions DOUBLE,
-  totalPercentDeductions DOUBLE,
-  totalDeductions DOUBLE,
-  netPay DOUBLE,
-  payRate DOUBLE,
-  payType VARCHAR,
-  totalHoursWorked DOUBLE,
-  payPeriodStart VARCHAR,
-  payPeriodEnd VARCHAR
+  EMPLOYEE_ID VARCHAR PRIMARY KEY,
+  PAY_PERIOD_NUMBER BIGINT PRIMARY KEY,
+  GROSS_PAY DOUBLE,
+  FEDERAL_TAX DOUBLE,
+  STATE_TAX DOUBLE,
+  ADDITIONAL_FEDERAL_WITHHOLDING DOUBLE,
+  ADDITIONAL_STATE_WITHHOLDING DOUBLE,
+  TOTAL_TAX DOUBLE,
+  TOTAL_FIXED_DEDUCTIONS DOUBLE,
+  TOTAL_PERCENT_DEDUCTIONS DOUBLE,
+  TOTAL_DEDUCTIONS DOUBLE,
+  NET_PAY DOUBLE,
+  PAY_RATE DOUBLE,
+  PAY_TYPE VARCHAR,
+  TOTAL_HOURS_WORKED DOUBLE,
+  PAY_PERIOD_START VARCHAR,
+  PAY_PERIOD_END VARCHAR
 ) WITH (
   KAFKA_TOPIC='employee-net-pay',
   KEY_FORMAT='JSON',

@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ListenerApi.Data.Entities;
 using ListenerApi.Data.Repositories;
 using Microsoft.Extensions.Logging;
@@ -204,21 +205,54 @@ public class DomainEventInfo
 
 public class NetPayEventPayload
 {
+    [JsonPropertyName("EMPLOYEE_ID")]
     public string EmployeeId { get; set; } = string.Empty;
+
+    [JsonPropertyName("PAY_PERIOD_NUMBER")]
     public long PayPeriodNumber { get; set; }
+
+    [JsonPropertyName("GROSS_PAY")]
     public double GrossPay { get; set; }
+
+    [JsonPropertyName("FEDERAL_TAX")]
     public double FederalTax { get; set; }
+
+    [JsonPropertyName("STATE_TAX")]
     public double StateTax { get; set; }
+
+    [JsonPropertyName("ADDITIONAL_FEDERAL_WITHHOLDING")]
     public double AdditionalFederalWithholding { get; set; }
+
+    [JsonPropertyName("ADDITIONAL_STATE_WITHHOLDING")]
     public double AdditionalStateWithholding { get; set; }
+
+    [JsonPropertyName("TOTAL_TAX")]
     public double TotalTax { get; set; }
+
+    [JsonPropertyName("TOTAL_FIXED_DEDUCTIONS")]
     public double TotalFixedDeductions { get; set; }
+
+    [JsonPropertyName("TOTAL_PERCENT_DEDUCTIONS")]
     public double TotalPercentDeductions { get; set; }
+
+    [JsonPropertyName("TOTAL_DEDUCTIONS")]
     public double TotalDeductions { get; set; }
+
+    [JsonPropertyName("NET_PAY")]
     public double NetPay { get; set; }
+
+    [JsonPropertyName("PAY_RATE")]
     public double PayRate { get; set; }
+
+    [JsonPropertyName("PAY_TYPE")]
     public string? PayType { get; set; }
+
+    [JsonPropertyName("TOTAL_HOURS_WORKED")]
     public double TotalHoursWorked { get; set; }
+
+    [JsonPropertyName("PAY_PERIOD_START")]
     public string? PayPeriodStart { get; set; }
+
+    [JsonPropertyName("PAY_PERIOD_END")]
     public string? PayPeriodEnd { get; set; }
 }

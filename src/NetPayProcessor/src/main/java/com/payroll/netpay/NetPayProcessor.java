@@ -88,8 +88,8 @@ public class NetPayProcessor implements Processor<String, String, String, String
         if (deactivatedEmployees.contains(employeeId)) {
             String outputKey = mapper.writeValueAsString(
                 mapper.createObjectNode()
-                    .put("employeeId", employeeId)
-                    .put("payPeriodNumber", payPeriodNumber)
+                    .put("EMPLOYEE_ID", employeeId)
+                    .put("PAY_PERIOD_NUMBER", payPeriodNumber)
             );
             context.forward(new Record<>(outputKey, null, System.currentTimeMillis()));
             log.info("Gross pay skipped (deactivated): employee={}, period={}, tombstone emitted", employeeId, payPeriodNumber);
@@ -168,8 +168,8 @@ public class NetPayProcessor implements Processor<String, String, String, String
             long payPeriodNumber = Long.parseLong(key.substring(key.indexOf(':') + 1));
             String outputKey = mapper.writeValueAsString(
                 mapper.createObjectNode()
-                    .put("employeeId", employeeId)
-                    .put("payPeriodNumber", payPeriodNumber)
+                    .put("EMPLOYEE_ID", employeeId)
+                    .put("PAY_PERIOD_NUMBER", payPeriodNumber)
             );
             context.forward(new Record<>(outputKey, null, System.currentTimeMillis()));
             grossPayStore.remove(key);
@@ -303,11 +303,11 @@ public class NetPayProcessor implements Processor<String, String, String, String
         result.setEmployeeId(employeeId);
         result.setPayPeriodNumber(payPeriodNumber);
 
-        // Output key: {"employeeId":"...","payPeriodNumber":55}
+        // Output key: {"EMPLOYEE_ID":"...","PAY_PERIOD_NUMBER":55}
         String outputKey = mapper.writeValueAsString(
             mapper.createObjectNode()
-                .put("employeeId", employeeId)
-                .put("payPeriodNumber", payPeriodNumber)
+                .put("EMPLOYEE_ID", employeeId)
+                .put("PAY_PERIOD_NUMBER", payPeriodNumber)
         );
         String outputValue = mapper.writeValueAsString(result);
 

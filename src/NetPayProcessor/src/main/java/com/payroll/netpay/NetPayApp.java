@@ -14,6 +14,7 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,33 +36,58 @@ import java.util.stream.Collectors;
 public class NetPayApp {
 
     private static final Logger log = LoggerFactory.getLogger(NetPayApp.class);
+    private static final long RESTART_DELAY_MS = 30_000;
 
     static final String GROSS_PAY_TOPIC = "employee-gross-pay";
     static final String EMPLOYEE_EVENTS_TOPIC = "employee-events";
     static final String NET_PAY_TOPIC = "employee-net-pay";
 
+    private static volatile boolean shuttingDown = false;
+
     public static void main(String[] args) {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            log.info("Shutdown hook fired, signaling graceful shutdown...");
+            shuttingDown = true;
+        }));
+
+        while (!shuttingDown) {
+            boolean shouldRestart = runOnce();
+            if (!shouldRestart) {
+                break;
+            }
+            log.info("Will restart in {} seconds...", RESTART_DELAY_MS / 1000);
+            try {
+                Thread.sleep(RESTART_DELAY_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            if (shuttingDown) {
+                break;
+            }
+            log.info("Restarting Net Pay Processor...");
+        }
+
+        log.info("Net Pay Processor exited");
+    }
+
+    /**
+     * Runs a single lifecycle of the Kafka Streams app.
+     * @return true if the app should restart (error), false for graceful shutdown.
+     */
+    private static boolean runOnce() {
+        // Clear stale in-memory state from any previous run
+        NetPayProcessor.grossPayStore.clear();
+        NetPayProcessor.taxConfigStore.clear();
+        NetPayProcessor.deductionStore.clear();
+        NetPayProcessor.deactivatedEmployees.clear();
+
         Properties props = buildConfig();
         String appId = props.getProperty(StreamsConfig.APPLICATION_ID_CONFIG);
         String bootstrapServers = props.getProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG);
 
-        // Delete the consumer group so Kafka Streams replays from earliest offset,
-        // rebuilding the in-memory ConcurrentHashMap state from the full event history.
-        // Required because state lives in static maps (not Kafka Streams state stores)
-        // and is lost on restart.
         resetConsumerGroup(appId, bootstrapServers);
-
-        // Pre-scan employee-events to build the deactivatedEmployees set BEFORE starting
-        // the topology. This is necessary because employee-events and employee-gross-pay
-        // have different partition keys (Dapr state key vs ksqlDB aggregate key), so the
-        // same employee's events land in different Kafka Streams tasks. Without pre-scanning,
-        // gross pay events can be processed before deactivation events, causing deactivated
-        // employees to appear in the output.
         prescanEmployeeEvents(bootstrapServers);
-
-        // Purge stale records from the employee-net-pay topic by producing tombstones
-        // for any deactivated employees. The ksqlDB SOURCE TABLE only removes rows when
-        // it receives tombstones; kafka-delete-records alone is insufficient.
         purgeDeactivatedFromNetPay(bootstrapServers);
 
         Topology topology = buildTopology();
@@ -71,11 +97,36 @@ public class NetPayApp {
         streams.cleanUp();
 
         CountDownLatch latch = new CountDownLatch(1);
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            log.info("Shutting down...");
-            streams.close();
+
+        streams.setUncaughtExceptionHandler(exception -> {
+            log.error("Uncaught exception in Kafka Streams: {} - {}",
+                exception.getClass().getSimpleName(), exception.getMessage());
+            return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
+        });
+
+        streams.setStateListener((newState, oldState) -> {
+            log.info("Kafka Streams state change: {} -> {}", oldState, newState);
+            if (newState == KafkaStreams.State.ERROR) {
+                latch.countDown();
+            }
+        });
+
+        // Ensure the shutdown hook can stop this run's streams instance
+        Thread shutdownWatcher = new Thread(() -> {
+            while (!shuttingDown) {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            log.info("Shutting down Kafka Streams...");
+            streams.close(Duration.ofSeconds(10));
             latch.countDown();
-        }));
+        });
+        shutdownWatcher.setDaemon(true);
+        shutdownWatcher.start();
 
         try {
             streams.start();
@@ -84,6 +135,15 @@ public class NetPayApp {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+
+        streams.close(Duration.ofSeconds(10));
+
+        if (shuttingDown) {
+            return false;
+        }
+
+        log.info("Kafka Streams terminated unexpectedly, will attempt auto-recovery");
+        return true;
     }
 
     private static void resetConsumerGroup(String appId, String bootstrapServers) {
@@ -272,7 +332,7 @@ public class NetPayApp {
                     if (record.key() == null) continue;
                     try {
                         JsonNode keyNode = mapper.readTree(record.key());
-                        String employeeId = keyNode.path("employeeId").asText(null);
+                        String employeeId = keyNode.path("EMPLOYEE_ID").asText(null);
                         if (employeeId != null && NetPayProcessor.deactivatedEmployees.contains(employeeId)) {
                             tombstoneKeys.add(record.key());
                         }

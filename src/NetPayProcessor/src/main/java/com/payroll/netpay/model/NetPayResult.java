@@ -3,55 +3,55 @@ package com.payroll.netpay.model;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class NetPayResult {
-    @JsonProperty("grossPay")
+    @JsonProperty("GROSS_PAY")
     private double grossPay;
 
-    @JsonProperty("federalTax")
+    @JsonProperty("FEDERAL_TAX")
     private double federalTax;
 
-    @JsonProperty("stateTax")
+    @JsonProperty("STATE_TAX")
     private double stateTax;
 
-    @JsonProperty("additionalFederalWithholding")
+    @JsonProperty("ADDITIONAL_FEDERAL_WITHHOLDING")
     private double additionalFederalWithholding;
 
-    @JsonProperty("additionalStateWithholding")
+    @JsonProperty("ADDITIONAL_STATE_WITHHOLDING")
     private double additionalStateWithholding;
 
-    @JsonProperty("totalTax")
+    @JsonProperty("TOTAL_TAX")
     private double totalTax;
 
-    @JsonProperty("totalFixedDeductions")
+    @JsonProperty("TOTAL_FIXED_DEDUCTIONS")
     private double totalFixedDeductions;
 
-    @JsonProperty("totalPercentDeductions")
+    @JsonProperty("TOTAL_PERCENT_DEDUCTIONS")
     private double totalPercentDeductions;
 
-    @JsonProperty("totalDeductions")
+    @JsonProperty("TOTAL_DEDUCTIONS")
     private double totalDeductions;
 
-    @JsonProperty("netPay")
+    @JsonProperty("NET_PAY")
     private double netPay;
 
-    @JsonProperty("payRate")
+    @JsonProperty("PAY_RATE")
     private double payRate;
 
-    @JsonProperty("payType")
+    @JsonProperty("PAY_TYPE")
     private String payType;
 
-    @JsonProperty("totalHoursWorked")
+    @JsonProperty("TOTAL_HOURS_WORKED")
     private double totalHoursWorked;
 
-    @JsonProperty("payPeriodStart")
+    @JsonProperty("PAY_PERIOD_START")
     private String payPeriodStart;
 
-    @JsonProperty("payPeriodEnd")
+    @JsonProperty("PAY_PERIOD_END")
     private String payPeriodEnd;
 
-    @JsonProperty("employeeId")
+    @JsonProperty("EMPLOYEE_ID")
     private String employeeId;
 
-    @JsonProperty("payPeriodNumber")
+    @JsonProperty("PAY_PERIOD_NUMBER")
     private long payPeriodNumber;
 
     public NetPayResult() {}
