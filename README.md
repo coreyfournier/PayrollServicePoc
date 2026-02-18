@@ -1,6 +1,6 @@
 # Employee Payroll System
 
-An event-driven microservices proof of concept built with C# ASP.NET Core, demonstrating Domain-Driven Design with Kafka event streaming, Orleans virtual actors, MongoDB/MySQL persistence, and real-time GraphQL subscriptions.
+An event-driven microservices proof of concept built with C# ASP.NET Core, demonstrating Domain-Driven Design with Kafka event streaming, materalized views, Dapr (outbox + message stream), MongoDB/MySQL persistence, and real-time GraphQL subscriptions.
 
 ## Architecture
 
