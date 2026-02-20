@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="Confluent.Kafka" Version="2.3.0" />
+    <PackageReference Include="Dapr.AspNetCore" Version="1.13.0" />
     <PackageReference Include="Microsoft.Orleans.Sdk" Version="8.0.0" />
     <PackageReference Include="MongoDB.Driver" Version="2.24.0" />
     <PackageReference Include="Orleans.Providers.MongoDB" Version="8.0.0" />
