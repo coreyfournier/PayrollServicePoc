@@ -22,20 +22,59 @@ public class EventSubscriptionController : ControllerBase
 
     [Dapr.Topic("kafka-pubsub-listener", "employee-events")]
     [HttpPost("employee-events")]
-    public async Task<IActionResult> HandleEmployeeEvent([FromBody] EmployeeEventPayload eventData)
+    public async Task<IActionResult> HandleEmployeeEvent()
     {
-        var (employeeId, eventId, eventType, _) = eventData.ResolveEventInfo();
-        _logger.LogInformation("Received employee event: {EventType} {EventId} for {EmployeeId}",
-            eventType, eventId, employeeId);
+        // Dapr outbox stringifies the JSON data field (Dapr bug #8130), so
+        // UseCloudEvents() can't properly unwrap it. Read the original body
+        // captured by EnableBuffering middleware and extract "data" manually.
+        var body = HttpContext.Items["RawBody"] as string ?? string.Empty;
+
+        _logger.LogInformation("Received employee event, body length={Length}", body.Length);
 
         try
         {
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+            EmployeeEventPayload? eventData = null;
+            using var doc = JsonDocument.Parse(body);
+
+            if (doc.RootElement.TryGetProperty("data", out var dataElement))
+            {
+                if (dataElement.ValueKind == JsonValueKind.String)
+                {
+                    // data is stringified JSON (Dapr bug #8130) — parse the string
+                    var dataString = dataElement.GetString();
+                    if (!string.IsNullOrEmpty(dataString))
+                        eventData = JsonSerializer.Deserialize<EmployeeEventPayload>(dataString, options);
+                }
+                else
+                {
+                    // data is a proper JSON object
+                    eventData = dataElement.Deserialize<EmployeeEventPayload>(options);
+                }
+            }
+            else
+            {
+                // No CloudEvent wrapper — try direct deserialization
+                eventData = doc.RootElement.Deserialize<EmployeeEventPayload>(options);
+            }
+
+            if (eventData == null)
+            {
+                _logger.LogWarning("Failed to deserialize employee event");
+                return BadRequest("Invalid payload");
+            }
+
+            var (employeeId, eventId, eventType, _) = eventData.ResolveEventInfo();
+            _logger.LogInformation("Processing employee event: {EventType} {EventId} for {EmployeeId}",
+                eventType, eventId, employeeId);
+
             await _eventProcessor.ProcessEmployeeEventAsync(eventData);
             return Ok();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing employee event {EventId}", eventId);
+            _logger.LogError(ex, "Error processing employee event, body={Body}", body);
             return StatusCode(500, "Error processing event");
         }
     }
@@ -60,7 +99,16 @@ public class EventSubscriptionController : ControllerBase
             using var doc = JsonDocument.Parse(body);
             if (doc.RootElement.TryGetProperty("data", out var dataElement))
             {
-                eventData = dataElement.Deserialize<NetPayEventPayload>(options);
+                if (dataElement.ValueKind == JsonValueKind.String)
+                {
+                    var dataString = dataElement.GetString();
+                    if (!string.IsNullOrEmpty(dataString))
+                        eventData = JsonSerializer.Deserialize<NetPayEventPayload>(dataString, options);
+                }
+                else
+                {
+                    eventData = dataElement.Deserialize<NetPayEventPayload>(options);
+                }
             }
             else
             {

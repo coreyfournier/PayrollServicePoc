@@ -76,12 +76,13 @@ using (var scope = app.Services.CreateScope())
 
 app.UseCors();
 
-// Capture raw body for employee-net-pay endpoint BEFORE UseCloudEvents() consumes it.
-// Raw Kafka messages (non-CloudEvent) get wrapped by Dapr, but the CloudEvents middleware
-// produces an empty body for them. This middleware preserves the original body.
+// Capture raw body for event subscription endpoints BEFORE UseCloudEvents() consumes it.
+// Dapr outbox stringifies the JSON data field (Dapr bug #8130), so UseCloudEvents()
+// produces a body that can't deserialize into our DTOs. We preserve the original
+// CloudEvent body and parse it manually in the controllers.
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.StartsWithSegments("/api/eventsubscription/employee-net-pay"))
+    if (context.Request.Path.StartsWithSegments("/api/eventsubscription"))
     {
         context.Request.EnableBuffering();
         using var reader = new StreamReader(context.Request.Body, leaveOpen: true);

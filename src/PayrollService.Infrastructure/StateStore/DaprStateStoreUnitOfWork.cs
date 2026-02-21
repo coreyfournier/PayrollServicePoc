@@ -96,7 +96,11 @@ public class DaprStateStoreUnitOfWork : IUnitOfWork
             // Serialize event as proper JSON object (not string) for Kafka payload
             var eventBytes = SerializeAsJsonObject(domainEvent);
 
-            // Metadata for outbox projection - cloudevent fields without 'outbox.' prefix
+            // Metadata for outbox entry - cloudevent fields
+            // NOTE: outbox.projection is intentionally NOT set. Without projection,
+            // Dapr publishes the entity state (which includes DomainEvents array,
+            // Id, UpdatedAt, PayRate, etc.) — matching the format expected by
+            // ksqlDB ($.DomainEvents[0].EventType) and NetPayProcessor.
             var outboxMetadata = new Dictionary<string, string>
             {
                 ["cloudevent.source"] = "payroll-api",
@@ -104,7 +108,6 @@ public class DaprStateStoreUnitOfWork : IUnitOfWork
                 ["cloudevent.datacontenttype"] = "application/json",
                 ["datacontenttype"] = "application/json",
                 ["contenttype"] = "application/json",
-                ["outbox.projection"] = "true"
             };
 
             requests.Add(new StateTransactionRequest(
