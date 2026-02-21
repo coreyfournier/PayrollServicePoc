@@ -536,3 +536,95 @@ h1 {
   font-weight: 700;
   color: var(--success);
 }
+
+/* Employee List Title with Live Indicator */
+.employee-list-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Live Indicator */
+.live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.live-indicator.connected {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.live-indicator.connecting {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.live-indicator.connected .live-dot {
+  background: #16a34a;
+  animation: pulse-green 2s ease-in-out infinite;
+}
+
+.live-indicator.connecting .live-dot {
+  background: #ca8a04;
+  animation: pulse-yellow 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes pulse-yellow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* Row Highlight Animations */
+.row-highlight-green {
+  animation: highlight-green 2s ease-out;
+}
+
+.row-highlight-blue {
+  animation: highlight-blue 2s ease-out;
+}
+
+.row-highlight-red {
+  animation: highlight-red 2s ease-out;
+}
+
+.row-highlight-amber {
+  animation: highlight-amber 2s ease-out;
+}
+
+@keyframes highlight-green {
+  0% { background-color: rgba(16, 185, 129, 0.25); }
+  100% { background-color: transparent; }
+}
+
+@keyframes highlight-blue {
+  0% { background-color: rgba(59, 130, 246, 0.25); }
+  100% { background-color: transparent; }
+}
+
+@keyframes highlight-red {
+  0% { background-color: rgba(239, 68, 68, 0.2); }
+  100% { background-color: transparent; }
+}
+
+@keyframes highlight-amber {
+  0% { background-color: rgba(245, 158, 11, 0.25); }
+  100% { background-color: transparent; }
+}

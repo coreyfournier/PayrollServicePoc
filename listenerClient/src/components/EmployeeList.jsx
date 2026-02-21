@@ -1,6 +1,7 @@
-import { useQuery, useMutation } from 'urql';
+import { useQuery, useMutation, useSubscription } from 'urql';
 import { GET_ALL_EMPLOYEES, DELETE_ALL_EMPLOYEES } from '../graphql/queries';
-import { useState } from 'react';
+import { EMPLOYEE_CHANGE_SUBSCRIPTION } from '../graphql/subscriptions';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 function PayDetailModal({ employee, onClose }) {
   const pa = employee.payAttributes;
@@ -71,26 +72,123 @@ export default function EmployeeList() {
   const [result, reexecuteQuery] = useQuery({ query: GET_ALL_EMPLOYEES });
   const [deleteResult, deleteAllEmployees] = useMutation(DELETE_ALL_EMPLOYEES);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+
+  const [employees, setEmployees] = useState([]);
+  const [highlightedIds, setHighlightedIds] = useState(new Map());
+  const highlightTimers = useRef(new Map());
+  const queryInitialized = useRef(false);
 
   const { data, fetching, error } = result;
+
+  const [subResult] = useSubscription({ query: EMPLOYEE_CHANGE_SUBSCRIPTION });
+
+  const triggerHighlight = useCallback((id, changeType) => {
+    setHighlightedIds(prev => {
+      const next = new Map(prev);
+      next.set(id, changeType);
+      return next;
+    });
+
+    if (highlightTimers.current.has(id)) {
+      clearTimeout(highlightTimers.current.get(id));
+    }
+
+    const timer = setTimeout(() => {
+      setHighlightedIds(prev => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      highlightTimers.current.delete(id);
+    }, 2000);
+    highlightTimers.current.set(id, timer);
+  }, []);
+
+  // Cleanup highlight timers on unmount
+  useEffect(() => {
+    return () => {
+      highlightTimers.current.forEach(timer => clearTimeout(timer));
+    };
+  }, []);
+
+  // Seed employees from query result
+  useEffect(() => {
+    if (data?.employees) {
+      setEmployees(data.employees);
+      queryInitialized.current = true;
+    }
+  }, [data]);
+
+  // Merge subscription events into local state
+  useEffect(() => {
+    if (!subResult.data?.onEmployeeChanged || !queryInitialized.current) return;
+
+    const { employee: incoming, changeType } = subResult.data.onEmployeeChanged;
+
+    setEmployees(prev => {
+      const idx = prev.findIndex(e => e.id === incoming.id);
+
+      if (idx >= 0) {
+        // Update existing employee, preserving fields the subscription doesn't include (e.g. createdAt)
+        const updated = [...prev];
+        updated[idx] = { ...prev[idx], ...incoming };
+        return updated;
+      } else {
+        // New employee — prepend
+        return [incoming, ...prev];
+      }
+    });
+
+    triggerHighlight(incoming.id, changeType);
+  }, [subResult.data, triggerHighlight]);
 
   const handleDeleteAll = async () => {
     await deleteAllEmployees();
     setShowConfirm(false);
+    setHighlightedIds(new Map());
+    highlightTimers.current.forEach(timer => clearTimeout(timer));
+    highlightTimers.current.clear();
     reexecuteQuery({ requestPolicy: 'network-only' });
   };
+
+  const getHighlightClass = (id) => {
+    const changeType = highlightedIds.get(id);
+    if (!changeType) return '';
+    switch (changeType) {
+      case 'created':
+      case 'activated':
+        return 'row-highlight-green';
+      case 'updated':
+        return 'row-highlight-blue';
+      case 'deactivated':
+        return 'row-highlight-red';
+      case 'payUpdated':
+        return 'row-highlight-amber';
+      default:
+        return 'row-highlight-blue';
+    }
+  };
+
+  // Derive selected employee from live state so the modal reflects updates
+  const selectedEmployee = selectedEmployeeId
+    ? employees.find(e => e.id === selectedEmployeeId)
+    : null;
 
   if (error) {
     return <div className="error">Error: {error.message}</div>;
   }
 
-  const employees = data?.employees || [];
-
   return (
     <div className="employee-list-container">
       <div className="employee-list-header">
-        <h2>Employee Records</h2>
+        <div className="employee-list-title">
+          <h2>Employee Records</h2>
+          <span className={`live-indicator ${subResult.fetching ? 'connecting' : 'connected'}`}>
+            <span className="live-dot" />
+            {subResult.fetching ? 'Connecting' : 'Live'}
+          </span>
+        </div>
         <div className="header-actions">
           <button
             className="btn btn-refresh"
@@ -133,7 +231,7 @@ export default function EmployeeList() {
       {selectedEmployee && (
         <PayDetailModal
           employee={selectedEmployee}
-          onClose={() => setSelectedEmployee(null)}
+          onClose={() => setSelectedEmployeeId(null)}
         />
       )}
 
@@ -143,7 +241,7 @@ export default function EmployeeList() {
         </div>
       )}
 
-      {fetching && <div className="loading">Loading employees...</div>}
+      {fetching && employees.length === 0 && <div className="loading">Loading employees...</div>}
 
       {!fetching && employees.length === 0 && (
         <div className="empty-state">
@@ -151,7 +249,7 @@ export default function EmployeeList() {
         </div>
       )}
 
-      {!fetching && employees.length > 0 && (
+      {employees.length > 0 && (
         <>
           <div className="record-count">
             Total Records: {employees.length}
@@ -172,7 +270,10 @@ export default function EmployeeList() {
               </thead>
               <tbody>
                 {employees.map((employee) => (
-                  <tr key={employee.id} className={employee.isActive ? '' : 'inactive'}>
+                  <tr
+                    key={employee.id}
+                    className={`${employee.isActive ? '' : 'inactive'} ${getHighlightClass(employee.id)}`}
+                  >
                     <td className="name-cell">
                       {employee.firstName} {employee.lastName}
                     </td>
@@ -186,7 +287,7 @@ export default function EmployeeList() {
                     </td>
                     <td
                       className={`pay-rate net-pay-cell${employee.payAttributes ? ' clickable' : ''}`}
-                      onClick={() => employee.payAttributes && setSelectedEmployee(employee)}
+                      onClick={() => employee.payAttributes && setSelectedEmployeeId(employee.id)}
                     >
                       {employee.payAttributes
                         ? `$${Number(employee.payAttributes.netPay).toFixed(2)}`
