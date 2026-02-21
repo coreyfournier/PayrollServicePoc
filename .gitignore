@@ -55,5 +55,5 @@ bld/
 ## macOS
 .DS_Store
 
-/.claude
+/.claude/
 nul

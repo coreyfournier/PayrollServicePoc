@@ -166,6 +166,9 @@ done < <(
 )
 log "  ksqlDB initialization complete."
 
+# Allow ksqlDB consumers to fully start before producing events
+sleep 10
+
 # ── 2. Create employees ────────────────────────────────────────────────────
 
 log "Creating employees..."
