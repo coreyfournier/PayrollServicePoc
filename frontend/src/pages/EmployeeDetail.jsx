@@ -7,7 +7,8 @@ import {
 import {
   getEmployee, getTimeEntries, getTaxInfo, getDeductions,
   clockIn, clockOut, createTaxInfo, updateTaxInfo,
-  createDeduction, updateDeduction, deleteDeduction, updateTimeEntry
+  createDeduction, updateDeduction, deleteDeduction, updateTimeEntry,
+  updateEmployee
 } from '../api';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -38,6 +39,15 @@ function EmployeeDetail() {
   const [timeEntryForm, setTimeEntryForm] = useState({
     clockIn: '',
     clockOut: '',
+  });
+  const [showEmployeeModal, setShowEmployeeModal] = useState(false);
+  const [employeeForm, setEmployeeForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    payType: 1,
+    payRate: '',
+    payPeriodHours: 40,
   });
 
   const [taxForm, setTaxForm] = useState({
@@ -225,6 +235,36 @@ function EmployeeDetail() {
     }
   };
 
+  const handleOpenEmployeeModal = () => {
+    setEmployeeForm({
+      firstName: employee.firstName,
+      lastName: employee.lastName,
+      email: employee.email,
+      payType: employee.payType,
+      payRate: employee.payRate,
+      payPeriodHours: employee.payPeriodHours ?? 40,
+    });
+    setShowEmployeeModal(true);
+  };
+
+  const handleSaveEmployee = async (e) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        ...employeeForm,
+        payType: parseInt(employeeForm.payType),
+        payRate: parseFloat(employeeForm.payRate),
+        payPeriodHours: parseFloat(employeeForm.payPeriodHours),
+        hireDate: employee.hireDate,
+      };
+      await updateEmployee(id, payload);
+      setShowEmployeeModal(false);
+      loadAllData();
+    } catch (error) {
+      console.error('Error updating employee:', error);
+    }
+  };
+
   const formatCurrency = (amount, payType) => {
     if (payType === 2) {
       return `$${amount.toLocaleString()}/year`;
@@ -277,7 +317,10 @@ function EmployeeDetail() {
               </div>
             </div>
           </div>
-          <div style={{ marginLeft: 'auto' }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+            <button className="btn btn-secondary" onClick={handleOpenEmployeeModal}>
+              <Edit /> Edit
+            </button>
             {employee.payType === 1 && (
               clockedIn ? (
                 <button className="btn btn-danger" onClick={handleClockOut}>
@@ -760,6 +803,102 @@ function EmployeeDetail() {
 
                 <div className="form-actions">
                   <button type="button" className="btn btn-secondary" onClick={() => setShowTimeEntryModal(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    Save Changes
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEmployeeModal && (
+        <div className="modal-overlay" onClick={() => setShowEmployeeModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Edit Employee</h3>
+              <button className="modal-close" onClick={() => setShowEmployeeModal(false)}>
+                <X />
+              </button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handleSaveEmployee}>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">First Name</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={employeeForm.firstName}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, firstName: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Last Name</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={employeeForm.lastName}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, lastName: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Email</label>
+                  <input
+                    type="email"
+                    className="form-input"
+                    value={employeeForm.email}
+                    onChange={(e) => setEmployeeForm({ ...employeeForm, email: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Pay Type</label>
+                    <select
+                      className="form-select"
+                      value={employeeForm.payType}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, payType: parseInt(e.target.value) })}
+                    >
+                      <option value={1}>Hourly</option>
+                      <option value={2}>Salary</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">
+                      Pay Rate {parseInt(employeeForm.payType) === 1 ? '($/hr)' : '($/yr)'}
+                    </label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      step="0.01"
+                      value={employeeForm.payRate}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, payRate: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                {parseInt(employeeForm.payType) === 2 && (
+                  <div className="form-group">
+                    <label className="form-label">Hours per Pay Period</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      step="0.5"
+                      min="0"
+                      value={employeeForm.payPeriodHours}
+                      onChange={(e) => setEmployeeForm({ ...employeeForm, payPeriodHours: e.target.value })}
+                    />
+                  </div>
+                )}
+                <div className="form-actions">
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowEmployeeModal(false)}>
                     Cancel
                   </button>
                   <button type="submit" className="btn btn-primary">
