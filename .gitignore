@@ -57,3 +57,4 @@ bld/
 
 /.claude/
 nul
+/listenerClient/node_modules
