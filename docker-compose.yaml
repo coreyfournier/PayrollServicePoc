@@ -392,6 +392,7 @@ services:
         condition: service_healthy
     volumes:
       - ./scripts/seed.sh:/seed.sh
+      - ./ksqldb/statements.sql:/statements.sql
     entrypoint: ["bash", "/seed.sh"]
     networks:
       - payroll-network

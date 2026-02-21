@@ -3,6 +3,10 @@
 ###############################################################################
 * text=auto
 
+# Files that run in Linux containers must always use LF
+*.sh text eol=lf
+*.sql text eol=lf
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

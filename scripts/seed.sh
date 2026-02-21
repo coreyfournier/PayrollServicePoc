@@ -89,100 +89,82 @@ cursor.close()
 conn.close()
 PYEOF
 
-# 1c. Clear all Kafka topics (except internal __ topics)
-# Non-compacted topics are truncated via kafka-delete-records.
-# Compacted topics (cleanup.policy=compact without delete) don't support
-# offset-based deletion, so they are deleted and recreated instead.
-log "Clearing Kafka topics..."
-python3 << 'PYEOF'
-import subprocess, json, re
+# 1c. Purge Kafka topic data
+# IMPORTANT: We purge (not delete) topics so that Dapr sidecar Kafka producers
+# keep their connections. Deleting topics breaks the outbox → Kafka pipeline
+# until the sidecar is restarted.
+log "Purging Kafka topics..."
+BOOTSTRAP=kafka:9092
 
-BOOTSTRAP = 'kafka:9092'
+# Ensure all application topics exist (idempotent, same as kafka-init)
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-events
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic timeentry-events
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic taxinfo-events
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic deduction-events
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-gross-pay
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
 
-result = subprocess.run(
-    ['kafka-topics', '--list', '--bootstrap-server', BOOTSTRAP],
-    capture_output=True, text=True
-)
-topics = [t.strip() for t in result.stdout.strip().split('\n')
-          if t.strip() and not t.strip().startswith('__')]
+# Purge non-compacted topics via kafka-delete-records (3 partitions each)
+PURGE_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay"
+python3 -c "
+import json
+topics = '$PURGE_TOPICS'.split()
+offsets = [{'topic': t, 'partition': p, 'offset': -1}
+           for t in topics for p in range(3)]
+json.dump({'partitions': offsets}, open('/tmp/offsets.json', 'w'))
+"
+kafka-delete-records --bootstrap-server $BOOTSTRAP --offset-json-file /tmp/offsets.json 2>/dev/null \
+  || log "  (some partitions may be empty, skipping)"
+log "  Purged non-compacted topics"
 
-if not topics:
-    print("  No topics to process")
-    exit(0)
-
-truncatable = []   # (topic, partitions) — use kafka-delete-records
-compacted = []     # (topic, partitions) — delete and recreate
-
-for topic in topics:
-    # Get partition count
-    desc = subprocess.run(
-        ['kafka-topics', '--describe', '--topic', topic, '--bootstrap-server', BOOTSTRAP],
-        capture_output=True, text=True
-    )
-    part_count = sum(1 for line in desc.stdout.split('\n')
-                     if 'Partition:' in line and line.startswith('\t'))
-
-    # Get cleanup.policy from dynamic topic config
-    cfg = subprocess.run(
-        ['kafka-configs', '--describe', '--entity-type', 'topics',
-         '--entity-name', topic, '--bootstrap-server', BOOTSTRAP],
-        capture_output=True, text=True
-    )
-    is_compact_only = False
-    for line in cfg.stdout.split('\n'):
-        m = re.search(r'cleanup\.policy=(\S+)', line)
-        if m:
-            policy = m.group(1)
-            is_compact_only = 'compact' in policy and 'delete' not in policy
-            break
-
-    if is_compact_only:
-        compacted.append((topic, part_count))
-    else:
-        truncatable.append((topic, part_count))
-
-# Truncate non-compacted topics via kafka-delete-records
-if truncatable:
-    offsets = []
-    for topic, part_count in truncatable:
-        for p in range(part_count):
-            offsets.append({"topic": topic, "partition": p, "offset": -1})
-    with open('/tmp/offsets.json', 'w') as f:
-        json.dump({"partitions": offsets}, f, indent=2)
-    print(f"  Truncating {len(truncatable)} topics ({len(offsets)} partitions):")
-    for t, _ in sorted(truncatable):
-        print(f"    {t}")
-
-# Delete and recreate compacted topics
-if compacted:
-    print(f"  Deleting and recreating {len(compacted)} compacted topics:")
-    for topic, part_count in sorted(compacted):
-        print(f"    {topic} ({part_count} partitions)")
-        subprocess.run(
-            ['kafka-topics', '--delete', '--topic', topic,
-             '--bootstrap-server', BOOTSTRAP],
-            capture_output=True
-        )
-        subprocess.run(
-            ['kafka-topics', '--create', '--topic', topic,
-             '--partitions', str(part_count), '--replication-factor', '1',
-             '--config', 'cleanup.policy=compact',
-             '--bootstrap-server', BOOTSTRAP],
-            capture_output=True
-        )
-
-# Flag file so the outer shell knows compacted topics were recreated
-if compacted:
-    with open('/tmp/compacted_cleared', 'w') as f:
-        f.write('1')
-PYEOF
-
-if [ -f /tmp/offsets.json ]; then
-  kafka-delete-records --bootstrap-server kafka:9092 --offset-json-file /tmp/offsets.json 2>/dev/null \
-    || log "  (some topics may not exist yet, skipping)"
-fi
+# Delete and recreate compacted topic (kafka-delete-records can't fully purge compacted topics)
+kafka-topics --delete --topic employee-net-pay --bootstrap-server $BOOTSTRAP 2>/dev/null || true
+sleep 2
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
+log "  Recreated compacted topic (employee-net-pay)"
 
 log "Clean slate complete."
+
+# ── 1d. Initialize ksqlDB streams and tables ─────────────────────────────
+
+KSQL="http://ksqldb-server:8088"
+
+log "Waiting for ksqlDB server..."
+until curl -sf "$KSQL/info" > /dev/null 2>&1; do
+  sleep 5
+done
+log "  ksqlDB is ready."
+
+# Terminate all running queries so DROP statements can succeed
+log "Terminating existing ksqlDB queries..."
+QUERY_IDS=$(curl -sf "$KSQL/ksql" \
+  -H 'Content-Type: application/vnd.ksql.v1+json' \
+  -d '{"ksql": "SHOW QUERIES;"}' \
+  | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//') || true
+for qid in $QUERY_IDS; do
+  log "  Terminating query $qid"
+  curl -sf -X POST "$KSQL/ksql" \
+    -H 'Content-Type: application/vnd.ksql.v1+json' \
+    -d "{\"ksql\": \"TERMINATE ${qid};\"}" > /dev/null || true
+  sleep 1
+done
+
+log "Submitting ksqlDB statements..."
+while IFS= read -r stmt; do
+  [ -z "$stmt" ] && continue
+  log "  Executing: $(echo "$stmt" | head -c 80)..."
+  curl -sf -X POST "$KSQL/ksql" \
+    -H 'Content-Type: application/vnd.ksql.v1+json' \
+    -d "{\"ksql\": \"${stmt}\", \"streamsProperties\": {}}" > /dev/null \
+    && log "    OK" \
+    || log "    FAILED"
+  sleep 2
+done < <(
+  # Collapse multi-line SQL into single-line statements split by semicolons
+  sed 's/--.*$//' /statements.sql | tr '\n' ' ' | sed 's/;/;\n/g' | sed 's/^[[:space:]]*//' | grep -v '^$'
+)
+log "  ksqlDB initialization complete."
 
 # ── 2. Create employees ────────────────────────────────────────────────────
 
@@ -451,11 +433,6 @@ log "  5 employees created"
 log "  40 time entries created (20 each for Sarah Johnson & Emily Brown)"
 log "  5 tax records created"
 log "  7 deductions created"
-log ""
-if [ -f /tmp/compacted_cleared ]; then
-  log "Compacted Kafka topics were recreated — restart stream processors:"
-  log "  docker-compose restart ksqldb-init net-pay-processor"
-fi
 log ""
 log "Verify with:"
 log "  curl http://localhost:5000/api/employees"
