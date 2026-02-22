@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, Users, DollarSign, Clock, FileText, Edit, Trash2, X } from 'lucide-react';
+import { Plus, Users, DollarSign, Clock, FileText, Edit, Trash2, X } from 'lucide-react';
 import { getEmployees, createEmployee, updateEmployee, deleteEmployee } from '../api';
 import { format } from 'date-fns';
+import SearchPanel from '../components/search/SearchPanel';
 
 const PAY_TYPES = { 1: 'Hourly', 2: 'Salary' };
 
@@ -10,7 +11,7 @@ function EmployeeList() {
   const navigate = useNavigate();
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [formData, setFormData] = useState({
@@ -38,15 +39,15 @@ function EmployeeList() {
     }
   };
 
-  const filteredEmployees = employees.filter(emp => {
-    const search = searchTerm.toLowerCase();
-    return (
-      emp.firstName.toLowerCase().includes(search) ||
-      emp.lastName.toLowerCase().includes(search) ||
-      emp.email.toLowerCase().includes(search) ||
-      emp.id.toLowerCase().includes(search)
-    );
-  });
+  const displayedEmployees = searchResults ?? employees;
+
+  const handleSearchResults = useCallback((results) => {
+    setSearchResults(results);
+  }, []);
+
+  const handleSearchReset = useCallback(() => {
+    setSearchResults(null);
+  }, []);
 
   const activeEmployees = employees.filter(e => e.isActive);
   const hourlyEmployees = employees.filter(e => e.payType === 1);
@@ -178,18 +179,8 @@ function EmployeeList() {
       </div>
 
       <div className="card">
-        <div className="card-header">
-          <h2 className="card-title">Employee Directory</h2>
-          <div className="search-container">
-            <Search className="search-icon" />
-            <input
-              type="text"
-              className="search-input"
-              placeholder="Search by name, email, or ID..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
+        <div className="card-body">
+          <SearchPanel onSearch={handleSearchResults} onReset={handleSearchReset} />
         </div>
         <div className="table-container">
           <table className="table">
@@ -205,7 +196,7 @@ function EmployeeList() {
               </tr>
             </thead>
             <tbody>
-              {filteredEmployees.map((employee) => (
+              {displayedEmployees.map((employee) => (
                 <tr
                   key={employee.id}
                   className="clickable"
@@ -249,7 +240,7 @@ function EmployeeList() {
               ))}
             </tbody>
           </table>
-          {filteredEmployees.length === 0 && (
+          {displayedEmployees.length === 0 && (
             <div className="empty-state">
               <Users />
               <h3>No employees found</h3>

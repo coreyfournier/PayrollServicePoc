@@ -10,6 +10,11 @@ export default defineConfig({
         target: 'http://localhost:5000',
         changeOrigin: true,
       },
+      '/es': {
+        target: 'http://localhost:9200',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/es/, ''),
+      },
     },
   },
 })
