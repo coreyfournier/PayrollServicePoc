@@ -106,6 +106,8 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 | ksqldb-server | 8088 | REST API |
 | mongodb | 27017 | Replica set, connect with `?directConnection=true` |
 | mysql | 3306 | |
+| elasticsearch | 9200 | Search index |
+| kafka-connect | 8083 | ES sink connector REST API |
 | zipkin | 9411 | Distributed tracing |
 
 ### Dapr Components (`dapr/components/`)
@@ -119,17 +121,19 @@ Both Dapr sidecars (`payroll-api-dapr`, `listener-api-dapr`) run as separate con
 
 ### Kafka Topics
 
-`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay`, `employee-net-pay` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`, `employee-net-pay-by-period`) are managed by ksqlDB.
+`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay`, `employee-net-pay`, `employee-search`, `employee-info` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`, `employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must be pre-created with 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs; otherwise the elasticsearch-updater's subscription auto-creates it with 1 partition, causing a partition count mismatch.
 
 ### ksqlDB Stream Processing
 
 ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-pay-period hour aggregates on the `payperiod-hours-changed` topic. Defined in `ksqldb/statements.sql`, executed by the `ksqldb-init` container on startup.
 
-**Pipeline (7 objects):**
+**Pipeline (9 objects):**
 
 ```
 employee-events topic
   → EMPLOYEE_EVENTS_RAW stream (raw CloudEvent envelope, data as VARCHAR)
+  ├→ EMPLOYEE_INFO_EVENTS stream (filtered for employee.* events)
+  │   → EMPLOYEE_INFO table (latest employee state per ID → employee-info topic)
   ├→ TIME_ENTRY_EVENTS stream (filtered for timeentry.clockedout / timeentry.updated)
   │   → EMPLOYEE_HOURS_BY_PERIOD table (aggregated per employee + pay period → payperiod-hours-changed topic)
   └→ GROSS_PAY_EVENTS stream (employee + timeentry events, normalized fields)
@@ -218,6 +222,52 @@ When a **deduction event** arrives: update store → look up latest gross pay fo
 - `src/NetPayProcessor/src/main/java/com/payroll/netpay/NetPayProcessor.java` — unified processor
 - `src/NetPayProcessor/src/main/java/com/payroll/netpay/TaxCalculator.java` — progressive bracket + state tax logic
 
+### Elasticsearch Updater (Kafka Consumer, Java 17)
+
+Standalone Kafka consumer application (`src/ElasticsearchUpdater/`) that combines employee info with their last 4 pay periods into a single search document. Connects directly to Kafka (no Dapr sidecar needed).
+
+**Pipeline:**
+
+```
+employee-info topic ──────────┐
+                               ├──→ ElasticsearchUpdater ──→ employee-search topic
+employee-net-pay topic ────────┘                                    │
+                                                                    ▼
+                                                         Kafka Connect ES Sink
+                                                                    │
+                                                                    ▼
+                                                         Elasticsearch (employee-search index)
+```
+
+**In-memory state:**
+- `employeeInfoMap` — keyed by employee ID, latest employee data from `employee-info` topic
+- `payPeriodsMap` — keyed by employee ID, `TreeMap<payPeriodNumber, PayPeriodRecord>` (auto-sorted, trimmed to last 4)
+
+**Behavior:**
+- On startup, pre-scans both input topics from the beginning to rebuild in-memory state
+- On `employee-info` event: updates employee info, produces combined document
+- On `employee-net-pay` event: adds/updates pay period in TreeMap, trims to last 4, produces combined document
+- If employee is deactivated (`IS_ACTIVE = "false"`), produces a tombstone (null value) to `employee-search`
+
+**`employee-search` topic schema:**
+- Key (string): employee ID GUID (plain string, not JSON)
+- Value (JSON): `{"employee_id": "...", "first_name": "John", "last_name": "Smith", "email": "...", "pay_type": "2", "pay_rate": 75000.0, "pay_period_hours": 40.0, "is_active": true, "hire_date": "...", "pay_periods": [{"pay_period_number": 55, "gross_pay": 1442.31, ...}, ...]}`
+- `pay_periods` array contains at most 4 entries (most recent pay periods)
+- Topic uses compacted cleanup policy (latest document per employee retained)
+
+**Kafka Connect ES Sink Connector:**
+- Registered by the seed script at `kafka-connect:8083`
+- Upserts documents from `employee-search` topic into the `employee-search` Elasticsearch index
+- Employee ID string becomes ES document `_id`
+- Tombstones (null values) delete documents from ES
+
+**Key files:**
+- `src/ElasticsearchUpdater/pom.xml` — Maven project (kafka-clients, jackson)
+- `src/ElasticsearchUpdater/src/main/java/com/payroll/esupdater/ElasticsearchUpdaterApp.java` — consumer loop + pre-scan
+- `src/ElasticsearchUpdater/src/main/java/com/payroll/esupdater/EmployeeSearchDocument.java` — combined document POJO
+- `src/ElasticsearchUpdater/src/main/java/com/payroll/esupdater/PayPeriodRecord.java` — pay period POJO
+- `docker/Dockerfile.kafka-connect` — Kafka Connect image with ES connector plugin
+
 ### MongoDB
 
 Runs as a single-node replica set (`rs0`) to support multi-document transactions. Replica set is auto-initialized via the container healthcheck script.
@@ -235,9 +285,11 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 - `ksqldb/statements.sql` — ksqlDB stream/table definitions for pay period aggregation
 - `scripts/seed.sh` — API-based seed script (runs as Docker container, exercises full event pipeline)
 - `src/NetPayProcessor/` — Kafka Streams Java app for net pay calculation
+- `src/ElasticsearchUpdater/` — Kafka consumer Java app combining employee info + net pay for Elasticsearch
+- `docker/Dockerfile.kafka-connect` — Kafka Connect image with Elasticsearch connector
 
 ## Known Issues
 
 - Dapr's transactional outbox does not preserve the data payload as a JSON object — it gets stringified. Tracked at https://github.com/dapr/dapr/issues/8130. The ksqlDB pipeline works around this by declaring `data` as VARCHAR and using `EXTRACTJSONFIELD`.
 - The `COLLECT_LIST` in the ksqlDB aggregation grows unboundedly (appends every event). Acceptable for a POC but would need a retention strategy in production.
-- Restarting `ksqldb-init` drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` to hit `MissingSourceTopicException`. The processor auto-recovers: it detects the error state, waits 30 seconds for topics to be recreated, then restarts its full lifecycle (consumer group reset, pre-scan, topology). No manual intervention needed.
+- Restarting `ksqldb-init` drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover: they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. No manual intervention needed.

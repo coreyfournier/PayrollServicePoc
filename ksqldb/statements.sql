@@ -19,6 +19,8 @@
 -- ============================================================
 
 -- Current / new objects
+DROP TABLE IF EXISTS EMPLOYEE_INFO DELETE TOPIC;
+DROP STREAM IF EXISTS EMPLOYEE_INFO_EVENTS DELETE TOPIC;
 DROP TABLE IF EXISTS EMPLOYEE_NET_PAY_BY_PERIOD;
 -- Legacy: previous versions used a stream + aggregation table
 DROP STREAM IF EXISTS EMPLOYEE_NET_PAY;
@@ -49,6 +51,52 @@ CREATE STREAM EMPLOYEE_EVENTS_RAW (
   KAFKA_TOPIC='employee-events',
   VALUE_FORMAT='JSON'
 );
+
+-- ============================================================
+-- Stream: extract employee info from employee.* events
+-- Captures employee.created and employee.updated events with
+-- all employee fields needed for the Elasticsearch search index
+-- ============================================================
+CREATE STREAM EMPLOYEE_INFO_EVENTS AS
+  SELECT
+    EXTRACTJSONFIELD(data, '$.Id') AS EMPLOYEE_ID,
+    EXTRACTJSONFIELD(data, '$.FirstName') AS FIRST_NAME,
+    EXTRACTJSONFIELD(data, '$.LastName') AS LAST_NAME,
+    EXTRACTJSONFIELD(data, '$.Email') AS EMAIL,
+    EXTRACTJSONFIELD(data, '$.PayType') AS PAY_TYPE,
+    CAST(EXTRACTJSONFIELD(data, '$.PayRate') AS DOUBLE) AS PAY_RATE,
+    CAST(EXTRACTJSONFIELD(data, '$.PayPeriodHours') AS DOUBLE) AS PAY_PERIOD_HOURS,
+    EXTRACTJSONFIELD(data, '$.IsActive') AS IS_ACTIVE,
+    EXTRACTJSONFIELD(data, '$.HireDate') AS HIRE_DATE,
+    EXTRACTJSONFIELD(data, '$.DomainEvents[0].EventType') AS EVENT_TYPE
+  FROM EMPLOYEE_EVENTS_RAW
+  WHERE EXTRACTJSONFIELD(data, '$.DomainEvents[0].EventType') LIKE 'employee.%'
+  EMIT CHANGES;
+
+-- ============================================================
+-- Table: latest employee state per ID → employee-info compacted topic
+-- Used by ElasticsearchUpdater to build combined search documents
+-- ============================================================
+CREATE TABLE EMPLOYEE_INFO WITH (
+  KAFKA_TOPIC='employee-info',
+  KEY_FORMAT='JSON',
+  VALUE_FORMAT='JSON',
+  PARTITIONS=3
+) AS
+  SELECT
+    EMPLOYEE_ID,
+    LATEST_BY_OFFSET(FIRST_NAME) AS FIRST_NAME,
+    LATEST_BY_OFFSET(LAST_NAME) AS LAST_NAME,
+    LATEST_BY_OFFSET(EMAIL) AS EMAIL,
+    LATEST_BY_OFFSET(PAY_TYPE) AS PAY_TYPE,
+    LATEST_BY_OFFSET(PAY_RATE) AS PAY_RATE,
+    LATEST_BY_OFFSET(PAY_PERIOD_HOURS) AS PAY_PERIOD_HOURS,
+    LATEST_BY_OFFSET(IS_ACTIVE) AS IS_ACTIVE,
+    LATEST_BY_OFFSET(HIRE_DATE) AS HIRE_DATE,
+    LATEST_BY_OFFSET(EVENT_TYPE) AS LAST_EVENT_TYPE
+  FROM EMPLOYEE_INFO_EVENTS
+  GROUP BY EMPLOYEE_ID
+  EMIT CHANGES;
 
 -- ============================================================
 -- Filtered stream for clock-out and update events

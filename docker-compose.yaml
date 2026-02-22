@@ -65,6 +65,8 @@ services:
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-gross-pay
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
 
       echo 'Topics created successfully:'
       kafka-topics --list --bootstrap-server kafka:9092
@@ -219,6 +221,80 @@ services:
       - payroll-network
     restart: on-failure
 
+  # Elasticsearch for search
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: elasticsearch
+    ports:
+      - "9200:9200"
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - payroll-network
+    healthcheck:
+      test: curl -sf http://localhost:9200/_cluster/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Kafka Connect with Elasticsearch Sink Connector
+  kafka-connect:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.kafka-connect
+    container_name: kafka-connect
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: payroll-connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    depends_on:
+      kafka:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - payroll-network
+    healthcheck:
+      test: curl -sf http://localhost:8083/connectors || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Elasticsearch Updater — combines employee-info + employee-net-pay → employee-search topic
+  elasticsearch-updater:
+    build:
+      context: ./src/ElasticsearchUpdater
+      dockerfile: Dockerfile
+    container_name: elasticsearch-updater
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      APPLICATION_ID: elasticsearch-updater
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - payroll-network
+    restart: on-failure
+
   # Kafka UI for monitoring
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -230,6 +306,8 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
       KAFKA_CLUSTERS_0_KSQLDBSERVER: http://ksqldb-server:8088
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: payroll-connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
     depends_on:
       kafka:
         condition: service_healthy
@@ -390,6 +468,10 @@ services:
         condition: service_healthy
       listener-api:
         condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      kafka-connect:
+        condition: service_healthy
     volumes:
       - ./scripts/seed.sh:/seed.sh
       - ./ksqldb/statements.sql:/statements.sql
@@ -404,3 +486,4 @@ networks:
 volumes:
   mongodb_data:
   mysql_data:
+  elasticsearch_data:

@@ -104,6 +104,8 @@ kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-gross-pay
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
 
 # Purge non-compacted topics via kafka-delete-records (3 partitions each)
 PURGE_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay"
@@ -118,15 +120,109 @@ kafka-delete-records --bootstrap-server $BOOTSTRAP --offset-json-file /tmp/offse
   || log "  (some partitions may be empty, skipping)"
 log "  Purged non-compacted topics"
 
-# Delete and recreate compacted topic (kafka-delete-records can't fully purge compacted topics)
+# Delete and recreate compacted topics (kafka-delete-records can't fully purge compacted topics)
 kafka-topics --delete --topic employee-net-pay --bootstrap-server $BOOTSTRAP 2>/dev/null || true
+kafka-topics --delete --topic employee-search --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 sleep 2
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
-log "  Recreated compacted topic (employee-net-pay)"
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
+log "  Recreated compacted topics (employee-net-pay, employee-search)"
 
 log "Clean slate complete."
 
-# ── 1d. Initialize ksqlDB streams and tables ─────────────────────────────
+# ── 1d. Elasticsearch index setup ────────────────────────────────────────
+
+ES="http://elasticsearch:9200"
+
+log "Waiting for Elasticsearch..."
+until curl -sf "$ES/_cluster/health" > /dev/null 2>&1; do
+  sleep 5
+done
+log "  Elasticsearch is ready."
+
+# Delete existing index (clean slate)
+curl -sf -X DELETE "$ES/employee-search" > /dev/null 2>&1 || true
+
+# Create index with explicit mappings
+log "Creating employee-search index with mappings..."
+curl -sf -X PUT "$ES/employee-search" \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "employee_id": { "type": "keyword" },
+      "first_name": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+      "last_name": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+      "email": { "type": "keyword" },
+      "pay_type": { "type": "keyword" },
+      "pay_rate": { "type": "double" },
+      "pay_period_hours": { "type": "double" },
+      "is_active": { "type": "boolean" },
+      "hire_date": { "type": "date", "format": "strict_date_optional_time||yyyy-MM-dd'\''T'\''HH:mm:ss'\''Z'\''||yyyy-MM-dd'\''T'\''HH:mm:ssX||epoch_millis" },
+      "pay_periods": {
+        "type": "nested",
+        "properties": {
+          "pay_period_number": { "type": "long" },
+          "gross_pay": { "type": "double" },
+          "federal_tax": { "type": "double" },
+          "state_tax": { "type": "double" },
+          "additional_federal_withholding": { "type": "double" },
+          "additional_state_withholding": { "type": "double" },
+          "total_tax": { "type": "double" },
+          "total_fixed_deductions": { "type": "double" },
+          "total_percent_deductions": { "type": "double" },
+          "total_deductions": { "type": "double" },
+          "net_pay": { "type": "double" },
+          "pay_rate": { "type": "double" },
+          "pay_type": { "type": "keyword" },
+          "total_hours_worked": { "type": "double" },
+          "pay_period_start": { "type": "date", "format": "strict_date_optional_time||yyyy-MM-dd'\''T'\''HH:mm:ss" },
+          "pay_period_end": { "type": "date", "format": "strict_date_optional_time||yyyy-MM-dd'\''T'\''HH:mm:ss" }
+        }
+      }
+    }
+  }
+}' > /dev/null && log "  Index created." || log "  Index creation failed."
+
+# ── 1e. Kafka Connect sink connector setup ───────────────────────────────
+
+CONNECT="http://kafka-connect:8083"
+
+log "Waiting for Kafka Connect..."
+until curl -sf "$CONNECT/connectors" > /dev/null 2>&1; do
+  sleep 5
+done
+log "  Kafka Connect is ready."
+
+# Delete existing connector (idempotent)
+curl -sf -X DELETE "$CONNECT/connectors/elasticsearch-sink" > /dev/null 2>&1 || true
+
+# Register ES Sink Connector
+log "Registering Elasticsearch sink connector..."
+curl -sf -X POST "$CONNECT/connectors" \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "name": "elasticsearch-sink",
+  "config": {
+    "connector.class": "io.confluent.connect.elasticsearch.ElasticsearchSinkConnector",
+    "topics": "employee-search",
+    "connection.url": "http://elasticsearch:9200",
+    "type.name": "_doc",
+    "key.ignore": false,
+    "schema.ignore": true,
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": false,
+    "behavior.on.null.values": "delete",
+    "write.method": "upsert"
+  }
+}' > /dev/null && log "  Connector registered." || log "  Connector registration failed."
+
+# ── 1f. Initialize ksqlDB streams and tables ─────────────────────────────
 
 KSQL="http://ksqldb-server:8088"
 
@@ -156,7 +252,7 @@ while IFS= read -r stmt; do
   log "  Executing: $(echo "$stmt" | head -c 80)..."
   curl -sf -X POST "$KSQL/ksql" \
     -H 'Content-Type: application/vnd.ksql.v1+json' \
-    -d "{\"ksql\": \"${stmt}\", \"streamsProperties\": {}}" > /dev/null \
+    -d "{\"ksql\": \"${stmt}\", \"streamsProperties\": {\"auto.offset.reset\": \"earliest\"}}" > /dev/null \
     && log "    OK" \
     || log "    FAILED"
   sleep 2
@@ -428,6 +524,18 @@ api_post "$API/deductions" -d "{
 }" > /dev/null
 log "  Michael Williams — Health (\$250), Vision (\$25), 401k (10%)"
 
+# ── 6. Verify Elasticsearch ──────────────────────────────────────────────
+
+log "Waiting for Elasticsearch documents to appear..."
+sleep 15
+
+ES_COUNT=$(curl -sf "$ES/employee-search/_count" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
+log "  Elasticsearch employee-search index: $ES_COUNT documents"
+
+CONNECTOR_STATE=$(curl -sf "$CONNECT/connectors/elasticsearch-sink/status" 2>/dev/null \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('connector',{}).get('state','UNKNOWN'))" 2>/dev/null || echo "UNKNOWN")
+log "  Kafka Connect elasticsearch-sink connector: $CONNECTOR_STATE"
+
 # ── Done ────────────────────────────────────────────────────────────────────
 
 log ""
@@ -436,8 +544,11 @@ log "  5 employees created"
 log "  40 time entries created (20 each for Sarah Johnson & Emily Brown)"
 log "  5 tax records created"
 log "  7 deductions created"
+log "  $ES_COUNT Elasticsearch documents"
 log ""
 log "Verify with:"
 log "  curl http://localhost:5000/api/employees"
 log "  curl http://localhost:5000/api/timeentries/employee/$EMP2_ID"
+log "  curl http://localhost:9200/employee-search/_search?pretty"
+log "  curl http://localhost:8083/connectors/elasticsearch-sink/status"
 log "  Check Kafka UI at http://localhost:8080"
