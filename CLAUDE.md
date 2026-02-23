@@ -12,7 +12,7 @@ Employee payroll system POC demonstrating Dapr with Kafka pub/sub, MongoDB state
 ```bash
 docker-compose up -d              # Start everything
 docker-compose down -v            # Tear down with volumes
-docker-compose up -d zookeeper kafka kafka-init mongodb zipkin  # Infrastructure only
+docker-compose up -d zookeeper kafka mongodb zipkin  # Infrastructure only
 ```
 
 ### Backend build (local)
@@ -45,7 +45,9 @@ cd listenerClient && npm install && npm run dev
 docker-compose up seed              # Run after the stack is up
 ```
 
-Creates 5 employees, 40 time entries (for the 2 hourly employees), 5 tax records, and 7 deductions via the REST API so the full event pipeline is exercised (Dapr outbox → Kafka → ksqlDB → ListenerApi → GraphQL). The script (`scripts/seed.sh`) clears existing data first, making it safe to re-run. Requires `payroll-api` and `listener-api` to be healthy.
+The seed script (`scripts/seed.sh`) is the single orchestrator for all initialization and data seeding. It handles: Keycloak token acquisition (when `USE_KEYCLOAK_AUTH=true`) → clean slate (MongoDB, MySQL, Kafka topics) → Elasticsearch index setup → Kafka Connect connector registration → ksqlDB stream/table initialization → data seeding via the REST API. Creates 5 employees, 40 time entries (for the 2 hourly employees), 5 tax records, and 7 deductions so the full event pipeline is exercised (Dapr outbox → Kafka → ksqlDB → NetPayProcessor → ElasticsearchUpdater → Kafka Connect → Elasticsearch). Clears existing data first, making it safe to re-run. Requires `payroll-api` and `listener-api` to be healthy (and `keycloak` when auth is enabled).
+
+**Dynamic time entry dates:** Time entry dates are computed dynamically using the same bi-weekly pay period math as ksqlDB (epoch 2024-01-01, 14-day periods). The script generates 10 weekdays in the previous period + 10 weekdays in the current period. This ensures hourly employees always have time entries in the same pay period as their employee creation event (`UpdatedAt` = now), so ksqlDB can compute gross pay (it needs both pay rate and hours in the same `(EMPLOYEE_ID, PAY_PERIOD_NUMBER)` group).
 
 ### No test suite exists yet.
 
@@ -62,7 +64,7 @@ Api (.NET 9.0)  →  Application (.NET 7.0)  →  Domain (.NET 7.0)
 - **Domain**: Entities (`Employee`, `TimeEntry`, `TaxInformation`, `Deduction`), domain events, repository interfaces. Base `Entity` class collects domain events in-memory. `Employee.PayPeriodHours` (decimal, default 40) specifies hours per pay period for salaried employees; used by ksqlDB to calculate gross pay instead of time entries.
 - **Application**: MediatR CQRS — commands for writes, queries for reads, DTOs for API boundaries.
 - **Infrastructure**: MongoDB persistence, Dapr state store integration, event publishing, data seeding. Contains `DependencyInjection.cs` for all service registration.
-- **Api**: ASP.NET Core controllers, Swagger UI at `/swagger`.
+- **Api**: ASP.NET Core controllers, Swagger UI at `/swagger`. JWT Bearer authentication via Keycloak.
 
 ### Two Unit-of-Work Implementations
 
@@ -93,6 +95,57 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 - `EmployeeRecord` — employee data from `employee-events` topic
 - `EmployeePayAttributes` — 1:1 with `EmployeeRecord`, stores latest pay period net pay breakdown from `employee-net-pay` topic. PK = `EmployeeId` (FK to `EmployeeRecord`, cascade delete). Exposed via GraphQL as `payAttributes` nested field on employees.
 
+### Keycloak Authentication
+
+Both APIs use JWT Bearer authentication via Keycloak. Three realms are configured in `keycloak/`:
+
+- **`payroll-pro`** (`payroll-pro-realm.json`) — for the payroll frontend and seed script
+  - Clients: `payroll-frontend` (public, PKCE), `seed-client` (confidential, password grant)
+  - User: `seed-bot` / `seed-bot-password` (service account for seed script)
+  - Both clients have `oidc-audience-mapper` to include `aud: payroll-api` in access tokens
+- **`listener-client`** (`listener-client-realm.json`) — for the listener client frontend
+  - Client: `listener-frontend` (public, PKCE)
+- **`shared`** — shared realm (if needed for cross-service flows)
+
+**Dual issuer support:** Both APIs accept tokens from the Docker-internal issuer (`http://keycloak:8180/realms/...`) and the browser-facing issuer (`http://localhost:8180/realms/...`). The seed script runs inside Docker and gets tokens with the internal issuer, while browsers use the localhost URL. Configured via `ValidIssuers` in `Program.cs`.
+
+**Realm import:** Keycloak imports realm JSON files from `keycloak/` on first start (via `--import-realm`). Keycloak only imports when the DB is empty — to re-import after changes, delete the keycloak DB volume: `docker volume rm daprpoc_keycloak_db_data`.
+
+### Keycloak Authentication Toggle
+
+Authentication can be disabled for development/demo scenarios via feature flags, following the same `Features:*` convention as `Features:UseDaprOutbox`.
+
+**Toggle:** `Features:UseKeycloakAuth` (env var `Features__UseKeycloakAuth`), default: `true` (no behavior change).
+
+When disabled:
+- Both APIs register a `NoAuthHandler` that always returns an authenticated principal, satisfying `[Authorize]` attributes without Keycloak
+- Both frontends skip OIDC login and render directly
+- The seed script skips Keycloak token acquisition
+
+**Usage:**
+
+```bash
+# With auth (default, unchanged):
+docker-compose up -d
+
+# Without auth (skips Keycloak entirely):
+docker-compose -f docker-compose.yaml -f docker-compose.noauth.yml up -d
+
+# Local dev without auth:
+Features__UseKeycloakAuth=false dotnet run --project src/PayrollService.Api
+VITE_AUTH_ENABLED=false npm run dev   # in frontend/ or listenerClient/
+```
+
+**Env vars by component:**
+
+| Component | Env Var | Default | Effect when `false` |
+|-----------|---------|---------|---------------------|
+| payroll-api | `Features__UseKeycloakAuth` | `true` | Uses NoAuthHandler instead of JWT Bearer |
+| listener-api | `Features__UseKeycloakAuth` | `true` | Uses NoAuthHandler instead of JWT Bearer |
+| frontend | `VITE_AUTH_ENABLED` | `true` | Skips OIDC login, hides user/logout UI |
+| listenerClient | `VITE_AUTH_ENABLED` | `true` | Skips OIDC login, uses unauthenticated URQL client |
+| seed | `USE_KEYCLOAK_AUTH` | `true` | Skips Keycloak wait and token acquisition |
+
 ### Service Ports (Docker)
 
 | Service | Port | Notes |
@@ -108,6 +161,7 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 | mysql | 3306 | |
 | elasticsearch | 9200 | Search index |
 | kafka-connect | 8083 | ES sink connector REST API |
+| keycloak | 8180 | Admin console, 3 realms: shared, payroll-pro, listener-client |
 | zipkin | 9411 | Distributed tracing |
 
 ### Dapr Components (`dapr/components/`)
@@ -121,11 +175,11 @@ Both Dapr sidecars (`payroll-api-dapr`, `listener-api-dapr`) run as separate con
 
 ### Kafka Topics
 
-`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay`, `employee-net-pay`, `employee-search`, `employee-info` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`, `employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must be pre-created with 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs; otherwise the elasticsearch-updater's subscription auto-creates it with 1 partition, causing a partition count mismatch.
+`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay`, `employee-net-pay`, `employee-search`, `employee-info` — created by the seed script (`scripts/seed.sh`). Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`, `employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must have 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs. The seed script handles this by deleting and recreating the topic with 3 partitions between DROP and CREATE statements, then running `kafka-topics --alter --partitions 3` as a fallback in case the elasticsearch-updater auto-creates it with 1 partition during the window.
 
 ### ksqlDB Stream Processing
 
-ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-pay-period hour aggregates on the `payperiod-hours-changed` topic. Defined in `ksqldb/statements.sql`, executed by the `ksqldb-init` container on startup.
+ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-pay-period hour aggregates on the `payperiod-hours-changed` topic. Defined in `ksqldb/statements.sql`, executed by the seed script on startup.
 
 **Pipeline (9 objects):**
 
@@ -168,7 +222,7 @@ employee-net-pay topic (produced by NetPayProcessor)
 - **PayPeriodHours for salaried employees** — Salaried employees don't clock in/out. The `PayPeriodHours` field on the Employee entity (default 40) specifies how many hours per pay period a salaried employee works. The ksqlDB pipeline uses `LATEST_BY_OFFSET(PAY_PERIOD_HOURS, true)` for `TOTAL_HOURS_WORKED` when `PAY_TYPE = '2'`, instead of summing time entries. Hourly employees still use the AS_MAP+REDUCE dedup pattern.
 - **Current period only** — Pay rate changes are assigned to the current pay period (via `$.UpdatedAt`), so only that period's `GROSS_PAY` updates. Past periods retain their existing values.
 
-**Init container behavior:** The `ksqldb-init` container terminates all running queries before executing DROP/CREATE statements, making it safe for re-deploys.
+**Init behavior:** The seed script terminates all running ksqlDB queries before executing DROP/CREATE statements, making it safe for re-runs. It waits 15 seconds after query terminations for ksqlDB to propagate the changes before issuing DROP statements.
 
 **Querying ksqlDB:**
 - Kafka UI at http://localhost:8080 (KSQL DB tab in sidebar)
@@ -274,7 +328,8 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 
 ### Key Files
 
-- `src/PayrollService.Api/Program.cs` — DI setup, feature flag for Dapr outbox toggle
+- `src/PayrollService.Api/Program.cs` — DI setup, feature flag for Dapr outbox toggle, Keycloak JWT auth
+- `src/PayrollService.Api/Auth/KeycloakClaimsTransformation.cs` — maps Keycloak `realm_access.roles` to .NET role claims
 - `src/PayrollService.Infrastructure/DependencyInjection.cs` — all infrastructure service registration
 - `src/PayrollService.Infrastructure/StateStore/DaprStateStoreUnitOfWork.cs` — atomic outbox logic
 - `src/PayrollService.Domain/Common/Entity.cs` — base entity with domain event collection
@@ -283,7 +338,9 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 - `src/ListenerApi/Controllers/EventSubscriptionController.cs` — Dapr subscription endpoints (employee-events, employee-net-pay)
 - `dapr/components/statestore-mongodb.yaml` — outbox configuration (critical for event publishing)
 - `ksqldb/statements.sql` — ksqlDB stream/table definitions for pay period aggregation
-- `scripts/seed.sh` — API-based seed script (runs as Docker container, exercises full event pipeline)
+- `scripts/seed.sh` — Consolidated seed script: Kafka topic creation, ksqlDB init, ES/Kafka Connect setup, and data seeding
+- `keycloak/payroll-pro-realm.json` — Keycloak realm config for payroll-pro (clients, users, audience mappers)
+- `keycloak/listener-client-realm.json` — Keycloak realm config for listener-client
 - `src/NetPayProcessor/` — Kafka Streams Java app for net pay calculation
 - `src/ElasticsearchUpdater/` — Kafka consumer Java app combining employee info + net pay for Elasticsearch
 - `docker/Dockerfile.kafka-connect` — Kafka Connect image with Elasticsearch connector
@@ -292,4 +349,5 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 
 - Dapr's transactional outbox does not preserve the data payload as a JSON object — it gets stringified. Tracked at https://github.com/dapr/dapr/issues/8130. The ksqlDB pipeline works around this by declaring `data` as VARCHAR and using `EXTRACTJSONFIELD`.
 - The `COLLECT_LIST` in the ksqlDB aggregation grows unboundedly (appends every event). Acceptable for a POC but would need a retention strategy in production.
-- Restarting `ksqldb-init` drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover: they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. No manual intervention needed.
+- Re-running the seed script drops and recreates ksqlDB-managed topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover: they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. However, the `elasticsearch-updater` may miss some `employee-info` records produced during the topic recreation window. If ES shows fewer than 5 documents after seeding, restart it: `docker restart elasticsearch-updater`.
+- **Current period only** — The ksqlDB `EMPLOYEE_GROSS_PAY_BY_PERIOD` table groups by `(EMPLOYEE_ID, PAY_PERIOD_NUMBER)`. Pay rate from employee events only appears in the pay period of the employee's `UpdatedAt` timestamp. Past pay periods (where only time entry events exist) will have `gross_pay=0` because they have no pay rate. The seed script mitigates this by generating time entries in the current pay period, but it's a fundamental limitation of the per-period grouping design.

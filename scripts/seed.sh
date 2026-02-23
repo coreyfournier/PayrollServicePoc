@@ -22,30 +22,68 @@ elif path.startswith('.'):
 
 API="http://payroll-api:80/api"
 LISTENER="http://listener-api:80"
+KEYCLOAK="http://keycloak:8180"
+
+USE_KEYCLOAK_AUTH="${USE_KEYCLOAK_AUTH:-true}"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 log()  { echo "==> $*"; }
 fail() { echo "FATAL: $*" >&2; exit 1; }
 
+# Returns auth header args for curl (empty when no token)
+auth_header() {
+  if [ -n "$ACCESS_TOKEN" ]; then
+    echo "-H" "Authorization: Bearer $ACCESS_TOKEN"
+  fi
+}
+
 # POST/PUT/DELETE with basic error handling. Prints response body to stdout.
 api_post() {
   url="$1"; shift
-  resp=$(curl -sf -X POST "$url" -H 'Content-Type: application/json' "$@") \
+  resp=$(curl -sf -X POST "$url" -H 'Content-Type: application/json' $(auth_header) "$@") \
     || fail "POST $url failed"
   echo "$resp"
 }
 
 api_put() {
   url="$1"; shift
-  resp=$(curl -sf -X PUT "$url" -H 'Content-Type: application/json' "$@") \
+  resp=$(curl -sf -X PUT "$url" -H 'Content-Type: application/json' $(auth_header) "$@") \
     || fail "PUT $url failed"
   echo "$resp"
 }
 
 api_delete() {
-  curl -sf -X DELETE "$1" -o /dev/null || fail "DELETE $1 failed"
+  curl -sf -X DELETE "$1" $(auth_header) -o /dev/null || fail "DELETE $1 failed"
 }
+
+# ── 0. Acquire Keycloak token (if auth enabled) ─────────────────────────────
+
+if [ "$USE_KEYCLOAK_AUTH" = "true" ]; then
+  log "Waiting for Keycloak OIDC discovery endpoint..."
+  until curl -sf "$KEYCLOAK/realms/payroll-pro/.well-known/openid-configuration" > /dev/null 2>&1; do
+    echo "  Keycloak not ready, retrying in 5s..."
+    sleep 5
+  done
+  log "  Keycloak is ready."
+
+  log "Acquiring access token from Keycloak (payroll-pro realm, seed-client)..."
+  TOKEN_RESPONSE=$(curl -sf -X POST "$KEYCLOAK/realms/payroll-pro/protocol/openid-connect/token" \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    -d 'grant_type=password' \
+    -d 'client_id=seed-client' \
+    -d 'client_secret=seed-client-secret' \
+    -d 'username=seed-bot' \
+    -d 'password=seed-bot-password') \
+    || fail "Failed to acquire token from Keycloak"
+
+  ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+  [ -n "$ACCESS_TOKEN" ] || fail "Empty access token"
+  log "  Token acquired successfully."
+else
+  log "Keycloak auth disabled (USE_KEYCLOAK_AUTH=$USE_KEYCLOAK_AUTH), skipping token acquisition."
+  ACCESS_TOKEN=""
+fi
 
 # ── 1. Clean slate ──────────────────────────────────────────────────────────
 
@@ -223,6 +261,9 @@ curl -sf -X POST "$CONNECT/connectors" \
 }' > /dev/null && log "  Connector registered." || log "  Connector registration failed."
 
 # ── 1f. Initialize ksqlDB streams and tables ─────────────────────────────
+# Single-script approach: seed owns Kafka topic creation (above), ksqlDB init,
+# and data seeding — no separate kafka-init or ksqldb-init containers needed.
+# This eliminates race conditions between containers.
 
 KSQL="http://ksqldb-server:8088"
 
@@ -246,15 +287,42 @@ for qid in $QUERY_IDS; do
   sleep 1
 done
 
+# Wait for ksqlDB to fully process all terminate commands before dropping objects.
+# Without this, DROP statements hit "Timeout waiting for command topic consumer" errors.
+if [ -n "$QUERY_IDS" ]; then
+  log "  Waiting for query terminations to propagate..."
+  sleep 15
+fi
+
 log "Submitting ksqlDB statements..."
+DROPS_DONE=false
 while IFS= read -r stmt; do
   [ -z "$stmt" ] && continue
+
+  # After all DROP statements finish, re-create employee-info topic with 3 partitions.
+  # DROPs with DELETE TOPIC destroy the topic; without this, consumers auto-create it
+  # with 1 partition (Kafka default), which breaks the EMPLOYEE_INFO CTAS (expects 3).
+  if [ "$DROPS_DONE" = "false" ] && echo "$stmt" | grep -qi "^CREATE "; then
+    DROPS_DONE=true
+    log "  Ensuring employee-info topic has 3 partitions..."
+    kafka-topics --delete --topic employee-info --bootstrap-server $BOOTSTRAP 2>/dev/null || true
+    sleep 2
+    kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP \
+      --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
+    # If elasticsearch-updater auto-created it with 1 partition during the sleep,
+    # alter to increase to 3 (Kafka allows increasing but not decreasing partitions)
+    kafka-topics --alter --topic employee-info --partitions 3 --bootstrap-server $BOOTSTRAP 2>/dev/null || true
+  fi
+
   log "  Executing: $(echo "$stmt" | head -c 80)..."
-  curl -sf -X POST "$KSQL/ksql" \
+  KSQL_RESP=$(curl -s -X POST "$KSQL/ksql" \
     -H 'Content-Type: application/vnd.ksql.v1+json' \
-    -d "{\"ksql\": \"${stmt}\", \"streamsProperties\": {\"auto.offset.reset\": \"earliest\"}}" > /dev/null \
-    && log "    OK" \
-    || log "    FAILED"
+    -d "{\"ksql\": \"${stmt}\", \"streamsProperties\": {\"auto.offset.reset\": \"earliest\"}}")
+  if echo "$KSQL_RESP" | grep -q '"@type":"currentStatus"' || echo "$KSQL_RESP" | grep -q '"commandStatus"'; then
+    log "    OK"
+  else
+    log "    FAILED: $(echo "$KSQL_RESP" | head -c 200)"
+  fi
   sleep 2
 done < <(
   # Collapse multi-line SQL into single-line statements split by semicolons
@@ -334,34 +402,58 @@ sleep 2
 
 # ── 3. Create time entries for hourly employees ────────────────────────────
 
-# 4 weeks of Mon-Fri work days (20 days total, spanning 2 pay periods)
-#   Week 1: Jan 19-23  (pay period 55)
-#   Week 2: Jan 26-30  (pay period 55)
-#   Week 3: Feb  2-6   (pay period 56)
-#   Week 4: Feb  9-13  (pay period 56)
+# 20 weekdays (Mon-Fri) computed dynamically using pay period math so that
+# entries always span the current and previous pay period.  The ksqlDB
+# EMPLOYEE_GROSS_PAY_BY_PERIOD table groups by (EMPLOYEE_ID, PAY_PERIOD_NUMBER)
+# and only sees the pay rate in the period where the employee creation event
+# lands (UpdatedAt = now, i.e. the current period).  By placing ~10 entries in
+# the current period, the demo always shows meaningful gross/net pay.
+# Past periods will still show hours but gross_pay=0 (known design limitation).
 
-WORK_DAYS="
-2026-01-19 08:00 16:30
-2026-01-20 08:15 17:00
-2026-01-21 08:30 16:45
-2026-01-22 08:00 17:15
-2026-01-23 08:45 17:00
-2026-01-26 08:00 16:30
-2026-01-27 08:15 16:45
-2026-01-28 08:30 17:00
-2026-01-29 08:00 17:15
-2026-01-30 08:45 17:30
-2026-02-02 08:00 16:30
-2026-02-03 08:15 17:00
-2026-02-04 08:30 16:45
-2026-02-05 08:00 17:15
-2026-02-06 08:45 17:00
-2026-02-09 08:00 16:30
-2026-02-10 08:15 17:00
-2026-02-11 08:30 16:45
-2026-02-12 08:00 17:15
-2026-02-13 08:45 17:30
-"
+WORK_DAYS=$(python3 << 'PYEOF'
+from datetime import datetime, timedelta
+
+SHIFTS = [
+    ("08:00", "16:30"), ("08:15", "17:00"), ("08:30", "16:45"),
+    ("08:00", "17:15"), ("08:45", "17:00"), ("08:00", "16:30"),
+    ("08:15", "16:45"), ("08:30", "17:00"), ("08:00", "17:15"),
+    ("08:45", "17:30"),
+]
+
+# Pay period epoch and length (same as ksqlDB)
+EPOCH = datetime(2024, 1, 1)
+PERIOD_DAYS = 14
+
+now = datetime.utcnow()
+days_since_epoch = (now - EPOCH).days
+current_period = days_since_epoch // PERIOD_DAYS
+current_start = EPOCH + timedelta(days=current_period * PERIOD_DAYS)
+prev_start = current_start - timedelta(days=PERIOD_DAYS)
+
+def weekdays_in_range(start, end):
+    """Return list of weekday dates in [start, end)."""
+    days = []
+    d = start
+    while d < end:
+        if d.weekday() < 5:
+            days.append(d)
+        d += timedelta(days=1)
+    return days
+
+# 10 weekdays from the previous period (take the last 10)
+prev_days = weekdays_in_range(prev_start, current_start)[-10:]
+
+# 10 weekdays from the current period (take the first 10)
+current_end = current_start + timedelta(days=PERIOD_DAYS)
+curr_days = weekdays_in_range(current_start, current_end)[:10]
+
+all_days = prev_days + curr_days
+
+for i, day in enumerate(all_days):
+    ci, co = SHIFTS[i % len(SHIFTS)]
+    print(f"{day.strftime('%Y-%m-%d')} {ci} {co}")
+PYEOF
+)
 
 create_time_entries() {
   emp_id="$1"

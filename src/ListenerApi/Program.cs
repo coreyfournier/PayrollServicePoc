@@ -1,10 +1,14 @@
+using ListenerApi.Auth;
 using ListenerApi.Data.DbContext;
 using ListenerApi.Data.Repositories;
 using ListenerApi.Data.Services;
 using ListenerApi.GraphQL.Mutations;
 using ListenerApi.GraphQL.Queries;
 using ListenerApi.GraphQL.Subscriptions;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,6 +39,53 @@ builder.Services.AddControllers(options =>
 }).AddDapr();
 builder.Services.AddDaprClient();
 
+// Authentication — Keycloak JWT or NoAuth depending on feature flag
+var useKeycloakAuth = builder.Configuration.GetValue<bool>("Features:UseKeycloakAuth", true);
+
+if (useKeycloakAuth)
+{
+    var keycloakAuthority = builder.Configuration.GetValue<string>("Keycloak:Authority")
+        ?? "http://localhost:8180/realms/listener-client";
+    var keycloakAudience = builder.Configuration.GetValue<string>("Keycloak:Audience")
+        ?? "listener-api";
+
+    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(options =>
+        {
+            options.Authority = keycloakAuthority;
+            options.RequireHttpsMetadata = false;
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidIssuer = keycloakAuthority.Replace("keycloak:8180", "localhost:8180"),
+                ValidAudiences = new[] { keycloakAudience, "account" },
+                ValidateAudience = true
+            };
+            // Extract access_token from WebSocket query string for GraphQL subscriptions
+            options.Events = new JwtBearerEvents
+            {
+                OnMessageReceived = context =>
+                {
+                    var accessToken = context.Request.Query["access_token"];
+                    if (!string.IsNullOrEmpty(accessToken) &&
+                        context.HttpContext.WebSockets.IsWebSocketRequest)
+                    {
+                        context.Token = accessToken;
+                    }
+                    return Task.CompletedTask;
+                }
+            };
+        });
+
+    builder.Services.AddTransient<IClaimsTransformation, KeycloakClaimsTransformation>();
+}
+else
+{
+    builder.Services.AddAuthentication("NoAuth")
+        .AddScheme<AuthenticationSchemeOptions, NoAuthHandler>("NoAuth", null);
+}
+
+builder.Services.AddAuthorization();
+
 // EF Core + MySQL
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<ListenerDbContext>(options =>
@@ -49,6 +100,7 @@ builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher
 // GraphQL
 builder.Services
     .AddGraphQLServer()
+    .AddAuthorization()
     .AddQueryType<EmployeeQuery>()
     .AddMutationType<EmployeeMutation>()
     .AddSubscriptionType<EmployeeSubscription>()
@@ -94,11 +146,17 @@ app.Use(async (context, next) =>
 });
 
 app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseWebSockets();
 app.UseCloudEvents();
 
+// Health endpoint for Docker healthcheck (no auth required)
+app.MapGet("/health", () => Results.Ok("healthy"));
+
+// GraphQL endpoint requires authorization; Dapr subscription endpoints are open
+app.MapGraphQL().RequireAuthorization();
 app.MapControllers();
 app.MapSubscribeHandler();
-app.MapGraphQL();
 
 app.Run();

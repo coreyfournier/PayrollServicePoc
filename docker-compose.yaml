@@ -47,33 +47,6 @@ services:
       retries: 10
       start_period: 30s
 
-  # Kafka topic initialization
-  kafka-init:
-    image: confluentinc/cp-kafka:7.5.0
-    container_name: kafka-init
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: ['/bin/sh', '-c']
-    command: |
-      "
-      echo 'Creating Kafka topics...'
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-events
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic timeentry-events
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic taxinfo-events
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic deduction-events
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-gross-pay
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
-
-      echo 'Topics created successfully:'
-      kafka-topics --list --bootstrap-server kafka:9092
-      "
-    networks:
-      - payroll-network
-
   # MongoDB database (replica set for transaction support)
   mongodb:
     image: mongo:7.0
@@ -123,6 +96,57 @@ services:
       retries: 5
       start_period: 10s
 
+  # Keycloak database (PostgreSQL)
+  keycloak-db:
+    image: postgres:16-alpine
+    container_name: keycloak-db
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak_password
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    networks:
+      - payroll-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Keycloak identity provider
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: keycloak
+    command: start-dev --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak_password
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_PORT: 8180
+      KC_HOSTNAME_URL: http://localhost:8180
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+    ports:
+      - "8180:8180"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    networks:
+      - payroll-network
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8180 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+
   # Zipkin for distributed tracing
   zipkin:
     image: openzipkin/zipkin:latest
@@ -146,62 +170,6 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    networks:
-      - payroll-network
-
-  # ksqlDB init container - creates streams and tables on startup
-  ksqldb-init:
-    image: confluentinc/cp-ksqldb-server:7.7.1
-    container_name: ksqldb-init
-    depends_on:
-      - ksqldb-server
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - |
-        echo 'Waiting for ksqlDB server to be ready...'
-        while ! curl -sf http://ksqldb-server:8088/info > /dev/null 2>&1; do
-          echo 'ksqlDB not ready yet, retrying in 5s...'
-          sleep 5
-        done
-        echo 'ksqlDB is ready.'
-
-        # Terminate all running queries so DROP statements can succeed
-        echo 'Terminating existing queries...'
-        QUERY_IDS=$$(curl -sf http://ksqldb-server:8088/ksql \
-          -H 'Content-Type: application/vnd.ksql.v1+json' \
-          -d '{"ksql": "SHOW QUERIES;"}' \
-          | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//')
-        for qid in $$QUERY_IDS; do
-          echo "Terminating query $$qid"
-          curl -sf -X POST http://ksqldb-server:8088/ksql \
-            -H 'Content-Type: application/vnd.ksql.v1+json' \
-            -d "{\"ksql\": \"TERMINATE $${qid};\"}" || true
-          sleep 1
-        done
-
-        echo 'Submitting SQL statements...'
-
-        # Read the SQL file and split on semicolons, submitting each statement
-        while IFS= read -r stmt; do
-          # Skip empty lines and comments
-          [ -z "$$stmt" ] && continue
-
-          echo "Executing: $$stmt"
-          curl -sf -X POST http://ksqldb-server:8088/ksql \
-            -H 'Content-Type: application/vnd.ksql.v1+json' \
-            -d "{\"ksql\": \"$${stmt}\", \"streamsProperties\": {}}" \
-            && echo -e '\nStatement executed successfully.' \
-            || echo -e '\nStatement execution failed.'
-          sleep 2
-        done < <(
-          # Collapse multi-line SQL into single-line statements split by semicolons
-          sed 's/--.*$$//' /statements.sql | tr '\n' ' ' | sed 's/;/;\n/g' | sed 's/^[[:space:]]*//' | grep -v '^$$'
-        )
-
-        echo 'All ksqlDB statements submitted.'
-    volumes:
-      - ./ksqldb/statements.sql:/statements.sql
     networks:
       - payroll-network
 
@@ -331,6 +299,10 @@ services:
       # Dapr sidecar endpoint configuration
       - DAPR_HTTP_ENDPOINT=http://payroll-api-dapr:3500
       - DAPR_GRPC_ENDPOINT=http://payroll-api-dapr:50001
+      # Keycloak JWT authentication
+      - Keycloak__Authority=http://keycloak:8180/realms/payroll-pro
+      - Keycloak__Audience=payroll-api
+      - Features__UseKeycloakAuth=${USE_KEYCLOAK_AUTH:-true}
     depends_on:
       mongodb:
         condition: service_healthy
@@ -339,7 +311,7 @@ services:
     networks:
       - payroll-network
     healthcheck:
-      test: curl -sf http://localhost:80/api/employees || exit 1
+      test: curl -sf http://localhost:80/swagger/v1/swagger.json || exit 1
       interval: 10s
       timeout: 10s
       retries: 10
@@ -381,6 +353,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-true}
     container_name: payroll-frontend
     ports:
       - "3000:80"
@@ -405,6 +379,10 @@ services:
       # Dapr sidecar endpoint configuration
       - DAPR_HTTP_ENDPOINT=http://listener-api-dapr:3501
       - DAPR_GRPC_ENDPOINT=http://listener-api-dapr:50002
+      # Keycloak JWT authentication
+      - Keycloak__Authority=http://keycloak:8180/realms/listener-client
+      - Keycloak__Audience=listener-api
+      - Features__UseKeycloakAuth=${USE_KEYCLOAK_AUTH:-true}
     depends_on:
       mysql:
         condition: service_healthy
@@ -413,7 +391,7 @@ services:
     networks:
       - payroll-network
     healthcheck:
-      test: curl -sf http://localhost:80/graphql || exit 1
+      test: curl -sf http://localhost:80/health || exit 1
       interval: 10s
       timeout: 10s
       retries: 10
@@ -450,6 +428,8 @@ services:
     build:
       context: ./listenerClient
       dockerfile: Dockerfile
+      args:
+        VITE_AUTH_ENABLED: ${VITE_AUTH_ENABLED:-true}
     container_name: listener-client
     ports:
       - "3001:80"
@@ -463,6 +443,8 @@ services:
   seed:
     image: confluentinc/cp-kafka:7.5.0
     container_name: seed
+    environment:
+      - USE_KEYCLOAK_AUTH=${USE_KEYCLOAK_AUTH:-true}
     depends_on:
       payroll-api:
         condition: service_healthy
@@ -487,3 +469,4 @@ volumes:
   mongodb_data:
   mysql_data:
   elasticsearch_data:
+  keycloak_db_data:

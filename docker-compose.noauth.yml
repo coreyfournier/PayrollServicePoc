@@ -1,0 +1,35 @@
+version: '3.8'
+
+# Override file to run the stack without Keycloak authentication.
+# Usage: docker-compose -f docker-compose.yaml -f docker-compose.noauth.yml up -d
+
+services:
+  keycloak-db:
+    deploy:
+      replicas: 0
+
+  keycloak:
+    deploy:
+      replicas: 0
+
+  payroll-api:
+    environment:
+      - Features__UseKeycloakAuth=false
+
+  listener-api:
+    environment:
+      - Features__UseKeycloakAuth=false
+
+  frontend:
+    build:
+      args:
+        VITE_AUTH_ENABLED: "false"
+
+  listener-client:
+    build:
+      args:
+        VITE_AUTH_ENABLED: "false"
+
+  seed:
+    environment:
+      - USE_KEYCLOAK_AUTH=false

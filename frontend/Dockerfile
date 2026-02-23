@@ -1,6 +1,8 @@
 # Build stage
 FROM node:18-alpine AS build
 WORKDIR /app
+ARG VITE_AUTH_ENABLED=true
+ENV VITE_AUTH_ENABLED=$VITE_AUTH_ENABLED
 COPY package*.json ./
 RUN npm ci
 COPY . .
