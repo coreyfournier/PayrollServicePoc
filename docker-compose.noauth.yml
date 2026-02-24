@@ -21,11 +21,15 @@ services:
       - Features__UseKeycloakAuth=false
 
   frontend:
+    environment:
+      - VITE_AUTH_ENABLED=false
     build:
       args:
         VITE_AUTH_ENABLED: "false"
 
   listener-client:
+    environment:
+      - VITE_AUTH_ENABLED=false
     build:
       args:
         VITE_AUTH_ENABLED: "false"

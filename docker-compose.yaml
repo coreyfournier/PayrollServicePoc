@@ -358,6 +358,8 @@ services:
     container_name: payroll-frontend
     ports:
       - "3000:80"
+    environment:
+      - VITE_AUTH_ENABLED=${VITE_AUTH_ENABLED:-true}
     depends_on:
       payroll-api:
         condition: service_healthy
@@ -433,6 +435,8 @@ services:
     container_name: listener-client
     ports:
       - "3001:80"
+    environment:
+      - VITE_AUTH_ENABLED=${VITE_AUTH_ENABLED:-true}
     depends_on:
       listener-api:
         condition: service_healthy

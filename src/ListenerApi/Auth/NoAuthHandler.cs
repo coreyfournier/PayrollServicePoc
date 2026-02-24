@@ -10,8 +10,9 @@ public class NoAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
     public NoAuthHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
-        UrlEncoder encoder)
-        : base(options, logger, encoder) { }
+        UrlEncoder encoder,
+        ISystemClock clock)
+        : base(options, logger, encoder, clock) { }
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
