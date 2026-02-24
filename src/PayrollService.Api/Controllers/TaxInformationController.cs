@@ -1,4 +1,5 @@
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PayrollService.Application.Commands.TaxInformation;
 using PayrollService.Application.DTOs;
@@ -6,6 +7,7 @@ using PayrollService.Application.Queries.TaxInformation;
 
 namespace PayrollService.Api.Controllers;
 
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
 public class TaxInformationController : ControllerBase

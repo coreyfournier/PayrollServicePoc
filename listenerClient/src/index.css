@@ -51,6 +51,49 @@ header {
   border-bottom: 2px solid var(--border);
 }
 
+.auth-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.auth-user {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.login-btn,
+.logout-btn {
+  background: var(--primary, #3b82f6);
+  color: white;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+
+.login-btn:hover,
+.logout-btn:hover {
+  opacity: 0.85;
+}
+
+.logout-btn {
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.logout-btn:hover {
+  color: var(--text-primary);
+  opacity: 1;
+}
+
 h1 {
   font-size: 36px;
   font-weight: 700;

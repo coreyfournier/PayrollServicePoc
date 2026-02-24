@@ -9,6 +9,22 @@ const api = axios.create({
   },
 });
 
+// Token getter — set by AuthTokenProvider once auth is ready
+let tokenGetter = null;
+
+export function setTokenGetter(getter) {
+  tokenGetter = getter;
+}
+
+// Attach Bearer token to every request
+api.interceptors.request.use((config) => {
+  const token = tokenGetter?.();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 // Employees
 export const getEmployees = () => api.get('/employees');
 export const getEmployee = (id) => api.get(`/employees/${id}`);

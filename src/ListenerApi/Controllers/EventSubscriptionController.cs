@@ -1,10 +1,12 @@
 using System.Text.Json;
 using Dapr;
 using ListenerApi.Data.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ListenerApi.Controllers;
 
+[AllowAnonymous]
 [ApiController]
 [Route("api/[controller]")]
 public class EventSubscriptionController : ControllerBase

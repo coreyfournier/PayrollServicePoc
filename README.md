@@ -240,6 +240,9 @@ Each employee has associated tax information and some have deductions configured
 
 ## Local Development
 
+1. **Bring Everything up without auth**
+```docker-compose -f docker-compose.yaml -f docker-compose.noauth.yml up -d --build
+```
 1. **Start infrastructure only**:
    ```bash
    docker-compose up -d zookeeper kafka kafka-init mongodb zipkin

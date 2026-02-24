@@ -13,6 +13,8 @@
     "urql": "^4.0.6",
     "graphql": "^16.8.1",
     "graphql-ws": "^5.14.3",
+    "oidc-client-ts": "^3.0.1",
+    "react-oidc-context": "^3.1.0",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.563.0"
   },

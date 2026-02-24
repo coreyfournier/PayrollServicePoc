@@ -1,0 +1,91 @@
+{
+  "realm": "shared",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+  "roles": {
+    "realm": [
+      {
+        "name": "payroll-user",
+        "description": "Payroll application user"
+      },
+      {
+        "name": "payroll-admin",
+        "description": "Payroll application administrator"
+      },
+      {
+        "name": "listener-user",
+        "description": "Listener application user"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "shared-broker",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "shared-broker-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"]
+    }
+  ],
+  "users": [
+    {
+      "username": "payroll.admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Payroll",
+      "lastName": "Admin",
+      "email": "payroll.admin@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["payroll-user", "payroll-admin", "listener-user"]
+    },
+    {
+      "username": "john.smith",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "John",
+      "lastName": "Smith",
+      "email": "john.smith@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["payroll-user", "listener-user"]
+    },
+    {
+      "username": "sarah.johnson",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Sarah",
+      "lastName": "Johnson",
+      "email": "sarah.johnson@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["payroll-user", "listener-user"]
+    }
+  ]
+}
