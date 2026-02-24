@@ -120,13 +120,27 @@ kafka-delete-records --bootstrap-server $BOOTSTRAP --offset-json-file /tmp/offse
   || log "  (some partitions may be empty, skipping)"
 log "  Purged non-compacted topics"
 
-# Delete and recreate compacted topics (kafka-delete-records can't fully purge compacted topics)
+# Delete and recreate compacted topics (kafka-delete-records can't fully purge compacted topics).
+# employee-info is included because elasticsearch-updater may auto-create it with 1 partition
+# before seed runs; deleting ensures it gets recreated with the correct 3 partitions.
 kafka-topics --delete --topic employee-net-pay --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 kafka-topics --delete --topic employee-search --bootstrap-server $BOOTSTRAP 2>/dev/null || true
+kafka-topics --delete --topic employee-info --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 sleep 2
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
-log "  Recreated compacted topics (employee-net-pay, employee-search)"
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
+log "  Recreated compacted topics (employee-net-pay, employee-search, employee-info)"
+
+# Fix partition count for any topics that were auto-created with 1 partition by consumers
+# (e.g., elasticsearch-updater subscribes to employee-info and employee-net-pay at startup,
+# triggering Kafka auto-creation before seed runs). --alter --partitions is idempotent when
+# the topic already has the target partition count.
+ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay employee-net-pay employee-search employee-info"
+for topic in $ALL_TOPICS; do
+  kafka-topics --alter --topic $topic --partitions 3 --bootstrap-server $BOOTSTRAP 2>/dev/null || true
+done
+log "  Verified all topics have 3 partitions"
 
 log "Clean slate complete."
 

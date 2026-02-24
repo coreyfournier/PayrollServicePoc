@@ -12,7 +12,7 @@ Employee payroll system POC demonstrating Dapr with Kafka pub/sub, MongoDB state
 ```bash
 docker-compose up -d              # Start everything
 docker-compose down -v            # Tear down with volumes
-docker-compose up -d zookeeper kafka kafka-init mongodb zipkin  # Infrastructure only
+docker-compose up -d zookeeper kafka mongodb zipkin  # Infrastructure only
 ```
 
 ### Backend build (local)
@@ -45,7 +45,9 @@ cd listenerClient && npm install && npm run dev
 docker-compose up seed              # Run after the stack is up
 ```
 
-Creates 5 employees, 40 time entries (for the 2 hourly employees), 5 tax records, and 7 deductions via the REST API so the full event pipeline is exercised (Dapr outbox → Kafka → ksqlDB → ListenerApi → GraphQL). The script (`scripts/seed.sh`) clears existing data first, making it safe to re-run. Requires `payroll-api` and `listener-api` to be healthy.
+The seed service is the **single initialization entry point** — it creates Kafka topics, initializes ksqlDB streams/tables, registers the Elasticsearch sink connector, and seeds data (5 employees, 40 time entries, 5 tax records, 7 deductions) via the REST API. This exercises the full event pipeline (Dapr outbox → Kafka → ksqlDB → ListenerApi → GraphQL). The script (`scripts/seed.sh`) clears existing data first, making it safe to re-run. Requires `payroll-api`, `listener-api`, `kafka`, `elasticsearch`, and `kafka-connect` to be healthy.
+
+The `kafka-init` and `ksqldb-init` services are available standalone under the `init` profile (`docker-compose --profile init up kafka-init`) but do not auto-start — seed handles everything.
 
 ### No test suite exists yet.
 
@@ -121,11 +123,11 @@ Both Dapr sidecars (`payroll-api-dapr`, `listener-api-dapr`) run as separate con
 
 ### Kafka Topics
 
-`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay`, `employee-net-pay`, `employee-search`, `employee-info` — created by `kafka-init` container. Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`, `employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must be pre-created with 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs; otherwise the elasticsearch-updater's subscription auto-creates it with 1 partition, causing a partition count mismatch.
+`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay`, `employee-net-pay`, `employee-search`, `employee-info` — created by the seed script (topic creation runs before ksqlDB initialization). Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`, `employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must be pre-created with 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs; the seed script ensures this ordering.
 
 ### ksqlDB Stream Processing
 
-ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-pay-period hour aggregates on the `payperiod-hours-changed` topic. Defined in `ksqldb/statements.sql`, executed by the `ksqldb-init` container on startup.
+ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-pay-period hour aggregates on the `payperiod-hours-changed` topic. Defined in `ksqldb/statements.sql`, executed by the seed script on startup (after topic creation).
 
 **Pipeline (9 objects):**
 
@@ -168,7 +170,7 @@ employee-net-pay topic (produced by NetPayProcessor)
 - **PayPeriodHours for salaried employees** — Salaried employees don't clock in/out. The `PayPeriodHours` field on the Employee entity (default 40) specifies how many hours per pay period a salaried employee works. The ksqlDB pipeline uses `LATEST_BY_OFFSET(PAY_PERIOD_HOURS, true)` for `TOTAL_HOURS_WORKED` when `PAY_TYPE = '2'`, instead of summing time entries. Hourly employees still use the AS_MAP+REDUCE dedup pattern.
 - **Current period only** — Pay rate changes are assigned to the current pay period (via `$.UpdatedAt`), so only that period's `GROSS_PAY` updates. Past periods retain their existing values.
 
-**Init container behavior:** The `ksqldb-init` container terminates all running queries before executing DROP/CREATE statements, making it safe for re-deploys.
+**Init behavior:** The seed script (and standalone `ksqldb-init` if run via `--profile init`) terminates all running queries before executing DROP/CREATE statements, making it safe for re-runs.
 
 **Querying ksqlDB:**
 - Kafka UI at http://localhost:8080 (KSQL DB tab in sidebar)
@@ -292,4 +294,4 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 
 - Dapr's transactional outbox does not preserve the data payload as a JSON object — it gets stringified. Tracked at https://github.com/dapr/dapr/issues/8130. The ksqlDB pipeline works around this by declaring `data` as VARCHAR and using `EXTRACTJSONFIELD`.
 - The `COLLECT_LIST` in the ksqlDB aggregation grows unboundedly (appends every event). Acceptable for a POC but would need a retention strategy in production.
-- Restarting `ksqldb-init` drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover: they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. No manual intervention needed.
+- Re-running ksqlDB initialization (via seed or `--profile init`) drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover: they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. No manual intervention needed.
