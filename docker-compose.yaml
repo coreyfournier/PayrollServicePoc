@@ -47,10 +47,11 @@ services:
       retries: 10
       start_period: 30s
 
-  # Kafka topic initialization
+  # Kafka topic initialization (standalone — normally handled by seed)
   kafka-init:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka-init
+    profiles: ["init"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -149,10 +150,11 @@ services:
     networks:
       - payroll-network
 
-  # ksqlDB init container - creates streams and tables on startup
+  # ksqlDB init container — standalone (normally handled by seed)
   ksqldb-init:
     image: confluentinc/cp-ksqldb-server:7.7.1
     container_name: ksqldb-init
+    profiles: ["init"]
     depends_on:
       - ksqldb-server
     entrypoint: /bin/bash
@@ -459,11 +461,13 @@ services:
     networks:
       - payroll-network
 
-  # Seed script — run with: docker-compose up seed
+  # Seed script — creates topics, initializes ksqlDB, seeds data, registers ES connector
   seed:
     image: confluentinc/cp-kafka:7.5.0
     container_name: seed
     depends_on:
+      kafka:
+        condition: service_healthy
       payroll-api:
         condition: service_healthy
       listener-api:
