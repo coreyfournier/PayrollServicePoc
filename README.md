@@ -295,3 +295,86 @@ DaprPoc/
 ```bash
 docker-compose down -v
 ```
+
+# Key takeaways
+## Air Gapped Domains
+* All services are fully independent of each other with mixed storage technology. 
+* Domain knowledge is not shared.
+* Domains are not required to have high uptime.
+
+## Subscriber Database Recovery
+1. Navigate to teh Employee Change Listner
+1. Choose Delete All Records
+1. Recover Employees
+   1. Stop `listener-api-dapr` container so it unsubscribes to kafka
+   1. In the Kafka UI http://localhost:8080/ui/clusters/payroll-cluster/consumer-groups/listener-api-group choose the elipse and Reset Offset to Earliest for all partitions and employee-events.
+   1. Start the container `listener-api-dapr` and watch new records get added.
+1. Recover net pay
+   1. Stop `listener-api-dapr` container so it unsubscribes to kafka
+   1. In the Kafka UI http://localhost:8080/ui/clusters/payroll-cluster/consumer-groups/listener-api-group choose the elipse and Reset Offset to Earliest for all partitions and employee-net-pay.
+   1. Start the container `listener-api-dapr` and watch the netpay get update on the employee.
+
+## Event-Driven Read Model Projections
+* The same `employee-events` stream powers three independent read models (MongoDB for REST queries, MySQL for GraphQL, Elasticsearch for search).
+* New read models can be added without touching the write side.
+
+## Transactional Outbox Pattern
+* Entity state and domain events are written atomically, eliminating the dual-write problem.
+* Events are guaranteed to publish if the entity persists — no "wrote to DB but failed to publish" inconsistency.
+
+## Derived Data via Stream Processing
+* Business calculations (hours aggregation, gross pay, net pay) happen in specialized processors outside the write service.
+* The API doesn't know how pay is calculated — it just publishes events.
+
+## Edit-Safe Aggregation
+* The ksqlDB `AS_MAP` + `REDUCE` pattern handles corrections without double-counting.
+* Editing a time entry replaces its hours instead of adding a duplicate — critical for payroll accuracy.
+
+## Polyglot Architecture
+* .NET API, Java Kafka Streams, ksqlDB SQL, React frontends — all integrated through Kafka as the universal backbone.
+* Each component uses the best tool for its job.
+
+## Dapr Infrastructure Abstraction
+* Pub/sub and state store are configured via YAML components.
+* Swapping Kafka for RabbitMQ or MongoDB for another store is a config change, not a code change.
+
+## Kafka as Durable Event Log
+* Events are retained indefinitely, enabling replay (as the subscriber recovery demonstrates), new consumer bootstrapping, and audit trails.
+* The elasticsearch-updater pre-scans topics from the beginning on every startup to rebuild its in-memory state.
+
+## Self-Healing Components
+* net-pay-processor and elasticsearch-updater detect topic loss, wait for recreation, and restart their full lifecycle automatically.
+* No manual intervention needed.
+
+## Graceful Degradation
+* If Elasticsearch goes down, payroll and the employee directory still work.
+* If the ListenerApi goes down, the REST API is unaffected.
+* Failures are isolated, not cascading. No single point of failure takes down the whole system.
+
+## Audit Trail / Compliance
+* Every state change is an immutable event in Kafka.
+* You can reconstruct the full history of any employee's pay changes — important for payroll audits and regulatory compliance.
+
+## Add Capabilities Without Disruption
+* Need a new report, a notification service, or an export to a third-party system? Subscribe to the existing event stream.
+* Zero changes to existing services, zero risk to current functionality.
+
+## Zero-Downtime Deployments
+* Updating tax calculation logic doesn't require redeploying the API or frontends.
+* Kafka buffers events while a service is restarting.
+
+## Team Autonomy
+* Each service has clear ownership boundaries.
+* The search team, payroll team, and reporting team can ship independently with different release cadences.
+
+## Temporal Decoupling
+* Producers and consumers don't need to be online simultaneously.
+* Events buffer in Kafka. A service deployed next month can bootstrap from today's event history.
+
+## Business Logic Isolation
+* Changing tax brackets in the Net Pay Processor can't break time entry aggregation in ksqlDB.
+* Each calculation stage is independently deployable and testable.
+
+## Testability
+* Each component can be tested in isolation with synthetic messages.
+* The Net Pay Processor doesn't need the full stack — just feed it Kafka records.
