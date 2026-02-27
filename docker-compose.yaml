@@ -221,7 +221,6 @@ services:
         condition: service_healthy
     networks:
       - payroll-network
-    restart: on-failure
 
   # Elasticsearch for search
   elasticsearch:
@@ -295,7 +294,6 @@ services:
         condition: service_healthy
     networks:
       - payroll-network
-    restart: on-failure
 
   # Kafka UI for monitoring
   kafka-ui:
@@ -376,7 +374,6 @@ services:
         condition: service_healthy
     networks:
       - payroll-network
-    restart: on-failure
 
   # Frontend Application
   frontend:
@@ -445,7 +442,6 @@ services:
         condition: service_healthy
     networks:
       - payroll-network
-    restart: on-failure
 
   # ListenerClient Frontend
   listener-client:
