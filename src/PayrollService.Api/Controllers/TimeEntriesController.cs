@@ -24,6 +24,13 @@ public class TimeEntriesController : ControllerBase
         return Ok(result);
     }
 
+    [HttpPost]
+    public async Task<ActionResult<TimeEntryDto>> Create([FromBody] CreateTimeEntryCommand command)
+    {
+        var result = await _mediator.Send(command);
+        return Ok(result);
+    }
+
     [HttpPost("clock-in/{employeeId:guid}")]
     public async Task<ActionResult<TimeEntryDto>> ClockIn(Guid employeeId)
     {

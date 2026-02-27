@@ -25,6 +25,31 @@ public class TimeEntry : Entity
         return timeEntry;
     }
 
+    public static TimeEntry Create(Guid employeeId, DateTime clockIn, DateTime? clockOut)
+    {
+        if (clockOut.HasValue && clockOut.Value <= clockIn)
+            throw new InvalidOperationException("Clock out must be after clock in.");
+
+        var hoursWorked = clockOut.HasValue
+            ? Math.Round((decimal)(clockOut.Value - clockIn).TotalHours, 2)
+            : 0m;
+
+        var timeEntry = new TimeEntry
+        {
+            EmployeeId = employeeId,
+            ClockIn = clockIn,
+            ClockOut = clockOut,
+            HoursWorked = hoursWorked
+        };
+
+        if (clockOut.HasValue)
+            timeEntry.AddDomainEvent(new EmployeeClockedOutEvent(timeEntry.Id, employeeId, clockIn, clockOut.Value, hoursWorked));
+        else
+            timeEntry.AddDomainEvent(new EmployeeClockedInEvent(timeEntry.Id, employeeId, clockIn));
+
+        return timeEntry;
+    }
+
     public void ClockOutEmployee()
     {
         if (ClockOut.HasValue)

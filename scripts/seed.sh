@@ -387,22 +387,11 @@ create_time_entries() {
     # skip blank lines
     [ -z "$day" ] && continue
 
-    # 1. Clock in (creates an open time entry with current timestamp)
-    entry=$(api_post "$API/timeentries/clock-in/$emp_id")
-    entry_id=$(echo "$entry" | jq -r '.id')
-
-    # 2. Clock out (closes the time entry)
-    sleep 0.5
-    api_post "$API/timeentries/clock-out/$emp_id" > /dev/null
-
-    # 3. PUT to set historical clock-in / clock-out times
-    sleep 0.5
-    api_put "$API/timeentries/$entry_id" \
-      -d "{\"clockIn\": \"${day}T${clock_in}:00Z\", \"clockOut\": \"${day}T${clock_out}:00Z\"}" \
+    api_post "$API/timeentries" \
+      -d "{\"employeeId\": \"${emp_id}\", \"clockIn\": \"${day}T${clock_in}:00Z\", \"clockOut\": \"${day}T${clock_out}:00Z\"}" \
       > /dev/null
 
     log "    $day  ${clock_in}-${clock_out}"
-    sleep 0.3
   done
 }
 
