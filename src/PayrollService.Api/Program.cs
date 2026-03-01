@@ -1,7 +1,6 @@
 using PayrollService.Application.Commands.Employee;
 using PayrollService.Infrastructure;
 using PayrollService.Infrastructure.Persistence;
-using PayrollService.Infrastructure.Seeding;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,14 +37,11 @@ builder.Services.AddInfrastructure(mongoConnectionString, mongoDatabaseName, use
 
 var app = builder.Build();
 
-// Initialize database and seed data
+// Initialize database
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<MongoDbContext>();
     await dbContext.InitializeAsync();
-
-    var seeder = scope.ServiceProvider.GetRequiredService<DataSeeder>();
-    await seeder.SeedAsync();
 }
 
 // Configure the HTTP request pipeline

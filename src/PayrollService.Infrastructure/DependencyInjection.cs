@@ -4,7 +4,6 @@ using PayrollService.Domain.Repositories;
 using PayrollService.Infrastructure.Events;
 using PayrollService.Infrastructure.Persistence;
 using PayrollService.Infrastructure.Repositories;
-using PayrollService.Infrastructure.Seeding;
 using PayrollService.Infrastructure.StateStore;
 
 namespace PayrollService.Infrastructure;
@@ -43,9 +42,6 @@ public static class DependencyInjection
             services.AddScoped<IEventPublisher, DaprEventPublisher>();
             services.AddScoped<IUnitOfWork, TransactionalUnitOfWork>();
         }
-
-        // Register data seeder
-        services.AddScoped<DataSeeder>();
 
         return services;
     }
