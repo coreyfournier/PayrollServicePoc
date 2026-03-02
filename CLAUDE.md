@@ -63,7 +63,7 @@ Api (.NET 9.0)  →  Application (.NET 7.0)  →  Domain (.NET 7.0)
 
 - **Domain**: Entities (`Employee`, `TimeEntry`, `TaxInformation`, `Deduction`), domain events, repository interfaces. Base `Entity` class collects domain events in-memory. `Employee.PayPeriodHours` (decimal, default 40) specifies hours per pay period for salaried employees; used by ksqlDB to calculate gross pay instead of time entries.
 - **Application**: MediatR CQRS — commands for writes, queries for reads, DTOs for API boundaries.
-- **Infrastructure**: MongoDB persistence, Dapr state store integration, event publishing, data seeding. Contains `DependencyInjection.cs` for all service registration.
+- **Infrastructure**: MongoDB persistence, Dapr state store integration, event publishing. Contains `DependencyInjection.cs` for all service registration.
 - **Api**: ASP.NET Core controllers, Swagger UI at `/swagger`.
 
 ### Two Unit-of-Work Implementations
