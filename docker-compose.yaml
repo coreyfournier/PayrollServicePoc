@@ -12,6 +12,11 @@ services:
       - "2181:2181"
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
     healthcheck:
       test: echo srvr | nc localhost 2181 || exit 1
       interval: 10s
@@ -40,6 +45,11 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
     healthcheck:
       test: kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1
       interval: 10s
@@ -55,6 +65,11 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
     entrypoint: ['/bin/sh', '-c']
     command: |
       "
@@ -86,6 +101,11 @@ services:
       - mongodb_data:/data/db
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       test: |
         mongosh --eval '
@@ -117,6 +137,11 @@ services:
       - mysql_data:/var/lib/mysql
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
       interval: 10s
@@ -132,6 +157,11 @@ services:
       - "9411:9411"
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
 
   # ksqlDB server for stream processing
   ksqldb-server:
@@ -149,6 +179,11 @@ services:
         condition: service_healthy
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
 
   # ksqlDB init container — standalone (normally handled by seed)
   ksqldb-init:
@@ -202,6 +237,11 @@ services:
         )
 
         echo 'All ksqlDB statements submitted.'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
     volumes:
       - ./ksqldb/statements.sql:/statements.sql
     networks:
@@ -221,6 +261,11 @@ services:
         condition: service_healthy
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
 
   # Elasticsearch for search
   elasticsearch:
@@ -236,6 +281,11 @@ services:
       - elasticsearch_data:/usr/share/elasticsearch/data
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
     healthcheck:
       test: curl -sf http://localhost:9200/_cluster/health || exit 1
       interval: 10s
@@ -266,6 +316,11 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
       CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
       CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: 768M
     depends_on:
       kafka:
         condition: service_healthy
@@ -294,6 +349,11 @@ services:
         condition: service_healthy
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 384M
 
   # Kafka UI for monitoring
   kafka-ui:
@@ -313,6 +373,11 @@ services:
         condition: service_healthy
     networks:
       - payroll-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
 
   # Payroll API Service
   payroll-api:
@@ -331,6 +396,11 @@ services:
       # Dapr sidecar endpoint configuration
       - DAPR_HTTP_ENDPOINT=http://payroll-api-dapr:3500
       - DAPR_GRPC_ENDPOINT=http://payroll-api-dapr:50001
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
     depends_on:
       mongodb:
         condition: service_healthy
@@ -365,6 +435,11 @@ services:
     volumes:
       - ./dapr/components:/components
       - ./dapr:/config
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
     depends_on:
       payroll-api:
         condition: service_healthy
@@ -383,6 +458,11 @@ services:
     container_name: payroll-frontend
     ports:
       - "3000:80"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
     depends_on:
       payroll-api:
         condition: service_healthy
@@ -404,6 +484,11 @@ services:
       # Dapr sidecar endpoint configuration
       - DAPR_HTTP_ENDPOINT=http://listener-api-dapr:3501
       - DAPR_GRPC_ENDPOINT=http://listener-api-dapr:50002
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
     depends_on:
       mysql:
         condition: service_healthy
@@ -435,6 +520,11 @@ services:
     volumes:
       - ./dapr/components:/components
       - ./dapr:/config
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
     depends_on:
       listener-api:
         condition: service_healthy
@@ -451,6 +541,11 @@ services:
     container_name: listener-client
     ports:
       - "3001:80"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
     depends_on:
       listener-api:
         condition: service_healthy
@@ -475,6 +570,11 @@ services:
     volumes:
       - ./scripts/seed.sh:/seed.sh
       - ./ksqldb/statements.sql:/statements.sql
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
     entrypoint: ["bash", "/seed.sh"]
     networks:
       - payroll-network
