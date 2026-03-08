@@ -83,41 +83,19 @@ public class DaprStateStoreUnitOfWork : IUnitOfWork
     private async Task PublishEventsWithOutbox(Entity entity, List<DomainEvent> domainEvents, CancellationToken cancellationToken)
     {
         var stateKey = GetStateKey(entity);
-        var requests = new List<StateTransactionRequest>();
 
         // Serialize entity as proper JSON object (not string)
+        // NOTE: outbox.projection is intentionally NOT set. Without projection,
+        // Dapr publishes the entity state (which includes DomainEvents array,
+        // Id, UpdatedAt, PayRate, etc.) — matching the format expected by
+        // ksqlDB ($.DomainEvents[0].EventType) and NetPayProcessor.
         var entityBytes = SerializeAsJsonObject(entity);
-        requests.Add(new StateTransactionRequest(stateKey, entityBytes, StateOperationType.Upsert));
-
-        foreach (var domainEvent in domainEvents)
+        var requests = new List<StateTransactionRequest>
         {
-            var topicName = GetTopicName(domainEvent.EventType);
+            new(stateKey, entityBytes, StateOperationType.Upsert)
+        };
 
-            // Serialize event as proper JSON object (not string) for Kafka payload
-            var eventBytes = SerializeAsJsonObject(domainEvent);
-
-            // Metadata for outbox entry - cloudevent fields
-            // NOTE: outbox.projection is intentionally NOT set. Without projection,
-            // Dapr publishes the entity state (which includes DomainEvents array,
-            // Id, UpdatedAt, PayRate, etc.) — matching the format expected by
-            // ksqlDB ($.DomainEvents[0].EventType) and NetPayProcessor.
-            var outboxMetadata = new Dictionary<string, string>
-            {
-                ["cloudevent.source"] = "payroll-api",
-                ["cloudevent.type"] = domainEvent.EventType,
-                ["cloudevent.datacontenttype"] = "application/json",
-                ["datacontenttype"] = "application/json",
-                ["contenttype"] = "application/json",
-            };
-
-            requests.Add(new StateTransactionRequest(
-                $"{stateKey}-event-{domainEvent.EventId}",
-                eventBytes,
-                StateOperationType.Upsert,
-                metadata: outboxMetadata));
-        }
-
-        // CloudEvent metadata at transaction level
+        // CloudEvent metadata — applied to the outbox message published to Kafka
         var transactionMetadata = new Dictionary<string, string>
         {
             ["cloudevent.source"] = "payroll-api",
@@ -144,9 +122,5 @@ public class DaprStateStoreUnitOfWork : IUnitOfWork
         return StateKeyHelper.GetKey(entityType, entity.Id);
     }
 
-    private static string GetTopicName(string eventType)
-    {
-        var prefix = eventType.Split('.')[0];
-        return $"{prefix}-events";
-    }
+
 }

@@ -14,7 +14,8 @@
       "Bash(docker exec:*)",
       "Bash(docker-compose ps:*)",
       "Bash(docker-compose build:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(docker compose:*)"
     ]
   }
 }
