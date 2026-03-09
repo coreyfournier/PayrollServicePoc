@@ -1,4 +1,9 @@
+using Dapr.Workflow;
+using PayrollService.Api.Actors;
+using PayrollService.Api.Workflows;
+using PayrollService.Api.Workflows.Activities;
 using PayrollService.Application.Commands.Employee;
+using PayrollService.Application.Options;
 using PayrollService.Infrastructure;
 using PayrollService.Infrastructure.Persistence;
 
@@ -16,7 +21,7 @@ builder.Services.AddCors(options =>
 });
 
 // Add services to the container
-builder.Services.AddControllers();
+builder.Services.AddControllers().AddDapr();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -28,6 +33,29 @@ builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(Creat
 
 // Add Dapr client
 builder.Services.AddDaprClient();
+
+// Add Dapr Workflow
+builder.Services.AddDaprWorkflow(options =>
+{
+    options.RegisterWorkflow<TransferWorkflow>();
+    options.RegisterActivity<ValidateTransferActivity>();
+    options.RegisterActivity<UpdateTransferStatusActivity>();
+    options.RegisterActivity<ExecuteBankTransferActivity>();
+    options.RegisterActivity<CompleteTransferActivity>();
+    options.RegisterActivity<FailTransferActivity>();
+    options.RegisterActivity<VerifyBalanceActivity>();
+    options.RegisterActivity<MarkAwaitingConfirmationActivity>();
+});
+
+// Add Dapr Actors
+builder.Services.AddActors(options =>
+{
+    options.Actors.RegisterActor<TransferActor>();
+});
+
+// Add Transfer Limits configuration
+builder.Services.Configure<TransferLimitsOptions>(
+    builder.Configuration.GetSection(TransferLimitsOptions.SectionName));
 
 // Add Infrastructure services
 var mongoConnectionString = builder.Configuration.GetValue<string>("MongoDB:ConnectionString") ?? "mongodb://localhost:27017";
@@ -52,6 +80,9 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseCloudEvents();
 app.MapControllers();
+app.MapSubscribeHandler();
+app.MapActorsHandlers();
 
 app.Run();

@@ -393,6 +393,10 @@ services:
       - MongoDB__ConnectionString=mongodb://mongodb:27017/?replicaSet=rs0
       - MongoDB__DatabaseName=payroll_db
       - Features__UseDaprOutbox=true
+      # Transfer limits
+      - TransferLimits__MaxPerPayPeriod=5
+      - TransferLimits__MaxAmountPerPayPeriod=10000
+      - TransferLimits__MaxPerDay=1
       # Dapr sidecar endpoint configuration
       - DAPR_HTTP_ENDPOINT=http://payroll-api-dapr:3500
       - DAPR_GRPC_ENDPOINT=http://payroll-api-dapr:50001
@@ -415,6 +419,36 @@ services:
       retries: 10
       start_period: 20s
 
+  # Dapr scheduler service (required for workflows in Dapr 1.16+)
+  scheduler:
+    image: "daprio/scheduler:1.16.0"
+    container_name: scheduler
+    command: ["./scheduler", "--port", "50006", "--etcd-data-dir", "/tmp/scheduler-data"]
+    ports:
+      - "50007:50006"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.15'
+          memory: 128M
+    networks:
+      - payroll-network
+
+  # Dapr placement service (required for actors and workflows)
+  placement:
+    image: "daprio/placement:1.16.0"
+    container_name: placement
+    command: ["./placement", "-port", "50006"]
+    ports:
+      - "50006:50006"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
+    networks:
+      - payroll-network
+
   # Dapr sidecar for Payroll API
   payroll-api-dapr:
     image: "daprio/daprd:1.16.0"
@@ -426,6 +460,8 @@ services:
       "-app-channel-address", "payroll-api",
       "-dapr-http-port", "3500",
       "-dapr-grpc-port", "50001",
+      "-placement-host-address", "placement:50006",
+      "-scheduler-host-address", "scheduler:50006",
       "-resources-path", "/components",
       "-config", "/config/config.yaml"
     ]
@@ -447,6 +483,10 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_healthy
+      placement:
+        condition: service_started
+      scheduler:
+        condition: service_started
     networks:
       - payroll-network
 

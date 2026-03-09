@@ -59,4 +59,26 @@ public class InMemorySubscriptionPublisher : ISubscriptionPublisher
             throw;
         }
     }
+
+    public async Task PublishTransferChangeAsync(TransferRecord transfer, string eventType)
+    {
+        try
+        {
+            var change = new TransferChange
+            {
+                Transfer = transfer,
+                ChangeType = eventType.Contains('.') ? eventType.Split('.')[1] : eventType,
+                Timestamp = DateTime.UtcNow
+            };
+
+            await _eventSender.SendAsync("TransferChanges", change);
+            _logger.LogInformation("Published transfer change: {ChangeType} for {TransferId}",
+                change.ChangeType, transfer.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to publish transfer change for {TransferId}", transfer.Id);
+            throw;
+        }
+    }
 }

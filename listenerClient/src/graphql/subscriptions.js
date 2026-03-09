@@ -30,7 +30,30 @@ export const EMPLOYEE_CHANGE_SUBSCRIPTION = `
           payPeriodStart
           payPeriodEnd
           payPeriodNumber
+          transferCount
+          transferTotalAmount
         }
+      }
+      changeType
+      timestamp
+    }
+  }
+`;
+
+export const TRANSFER_CHANGE_SUBSCRIPTION = `
+  subscription OnTransferChanged {
+    onTransferChanged {
+      transfer {
+        id
+        employeeId
+        amount
+        payPeriodNumber
+        status
+        initiatedAt
+        completedAt
+        failureReason
+        externalReferenceId
+        updatedAt
       }
       changeType
       timestamp

@@ -33,4 +33,15 @@ export const createDeduction = (data) => api.post('/deductions', data);
 export const updateDeduction = (id, data) => api.put(`/deductions/${id}`, data);
 export const deleteDeduction = (id) => api.delete(`/deductions/${id}`);
 
+// Transfers
+export const getTransfers = (employeeId) => api.get(`/transfers/employee/${employeeId}`);
+export const initiateTransfer = (data) => api.post('/transfers', data);
+export const getTransferLimits = (employeeId, payPeriodNumber) => api.get(`/transfers/employee/${employeeId}/limits`, { params: { payPeriodNumber } });
+export const acceptTransferBalanceChange = (transferId, accepted) => api.post(`/transfers/${transferId}/accept`, { accepted });
+
+// Bank Accounts
+export const getBankAccounts = (employeeId) => api.get(`/bankaccounts/employee/${employeeId}`);
+export const createBankAccount = (data) => api.post('/bankaccounts', data);
+export const updateBankAccount = (id, data) => api.put(`/bankaccounts/${id}`, data);
+
 export default api;

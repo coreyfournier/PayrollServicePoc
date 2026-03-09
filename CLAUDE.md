@@ -274,6 +274,52 @@ employee-net-pay topic ────────┘                              
 
 Runs as a single-node replica set (`rs0`) to support multi-document transactions. Replica set is auto-initialized via the container healthcheck script.
 
+### Transfer Workflow
+
+The transfer feature demonstrates several advanced architecture patterns:
+
+**Async Command Pattern (CQRS across services):**
+```
+ListenerClient → ListenerApi → Kafka (transfer-requests) → Payroll-api → Actor → Workflow
+                      ↑                                                        ↓
+                    MySQL ←── Kafka (transfer-events) ←─────────────────────────┘
+                 (read model)
+```
+
+- ListenerApi persists a `TransferRequest` to MySQL (status: Queued) and publishes to `transfer-requests` Kafka topic via Dapr pub/sub. The client sees the transfer immediately on refresh regardless of payroll-api availability.
+- Payroll-api subscribes to `transfer-requests`, processes through a Dapr Actor + Workflow.
+- Transfer events flow back on a dedicated `transfer-events` topic (via `statestore-transfers.yaml` component) → ListenerApi updates the transfer record → GraphQL subscription notifies the client.
+
+**Dapr Actors for Concurrency Control:**
+- `TransferActor` is keyed by employeeId. Dapr Actors guarantee single-threaded execution per actor ID, eliminating concurrent transfer races without manual locking.
+- The actor checks transfer limits (per pay period count, per period amount, per day count), creates the Transfer entity atomically, then starts the Dapr Workflow.
+
+**Dapr Workflow (Durable Task Framework):**
+- `TransferWorkflow` orchestrates: validate → mark processing → call simulated bank → complete/fail.
+- Retries bank transfer up to 3 times with exponential backoff.
+- Each state change persists via `DaprTransferStateStoreUnitOfWork` (outbox → `transfer-events` topic).
+
+**Transfer Limits:**
+- Configurable via environment variables: `TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`.
+- Payroll-api enforces authoritatively inside the actor. ListenerApi does a best-effort pre-check from its own materialized MySQL data.
+- The `GET /api/transfers/employee/{id}/limits` endpoint returns limits + current usage + `canTransfer` boolean.
+
+**Simulated Bank Service:**
+- `SimulatedBankService` adds random delays (1-10s) and ~20% failure rate to test the retry workflow.
+
+**Key Files:**
+- `src/PayrollService.Api/Actors/TransferActor.cs` — Dapr Actor for concurrency control
+- `src/PayrollService.Api/Workflows/TransferWorkflow.cs` — Dapr Workflow orchestration
+- `src/PayrollService.Infrastructure/StateStore/DaprTransferStateStoreUnitOfWork.cs` — transfer-specific outbox
+- `src/PayrollService.Infrastructure/ExternalServices/SimulatedBankService.cs` — simulated bank
+- `src/ListenerApi/Controllers/TransferController.cs` — async command initiation + queries
+- `dapr/components/statestore-transfers.yaml` — dedicated state store for transfer-events topic
+
+### Kafka Topics (Transfers)
+
+- `transfer-requests` — async commands from ListenerApi to payroll-api
+- `transfer-events` — transfer state changes from payroll-api to ListenerApi (via Dapr outbox)
+
 ### Key Files
 
 - `src/PayrollService.Api/Program.cs` — DI setup, feature flag for Dapr outbox toggle
@@ -289,6 +335,11 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 - `src/NetPayProcessor/` — Kafka Streams Java app for net pay calculation
 - `src/ElasticsearchUpdater/` — Kafka consumer Java app combining employee info + net pay for Elasticsearch
 - `docker/Dockerfile.kafka-connect` — Kafka Connect image with Elasticsearch connector
+- `src/PayrollService.Api/Actors/TransferActor.cs` — Dapr Actor for transfer concurrency
+- `src/PayrollService.Api/Workflows/TransferWorkflow.cs` — transfer workflow orchestration
+- `src/PayrollService.Domain/Entities/Transfer.cs` — transfer domain entity
+- `src/PayrollService.Domain/Entities/BankAccount.cs` — bank account domain entity
+- `dapr/components/statestore-transfers.yaml` — transfer-specific Dapr state store with outbox
 
 ## Known Issues
 

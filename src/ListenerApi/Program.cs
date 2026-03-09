@@ -44,6 +44,7 @@ builder.Services.AddDbContext<ListenerDbContext>(options =>
 builder.Services.AddScoped<IEmployeeRecordRepository, EmployeeRecordRepository>();
 builder.Services.AddScoped<IEmployeePayAttributesRepository, EmployeePayAttributesRepository>();
 builder.Services.AddScoped<EventProcessor>();
+builder.Services.AddScoped<ITransferRecordRepository, TransferRecordRepository>();
 builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher>();
 
 // GraphQL

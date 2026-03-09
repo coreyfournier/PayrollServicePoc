@@ -21,6 +21,10 @@ public class EmployeePayAttributes
     public string PayPeriodEnd { get; set; } = string.Empty;
     public DateTime UpdatedAt { get; set; }
 
+    // Transfer summary (materialized from completed transfers)
+    public int TransferCount { get; set; }
+    public decimal TransferTotalAmount { get; set; }
+
     // Navigation
     public EmployeeRecord Employee { get; set; } = null!;
 }

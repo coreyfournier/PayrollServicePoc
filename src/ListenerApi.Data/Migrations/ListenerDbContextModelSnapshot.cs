@@ -90,6 +90,13 @@ namespace ListenerApi.Data.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<int>("TransferCount")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("TransferTotalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("datetime(6)");
 
@@ -161,11 +168,73 @@ namespace ListenerApi.Data.Migrations
                     b.ToTable("EmployeeRecords");
                 });
 
+            modelBuilder.Entity("ListenerApi.Data.Entities.TransferRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal?>("CurrentBalance")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ExternalReferenceId")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<DateTime>("InitiatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<long>("PayPeriodNumber")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmployeeId", "InitiatedAt");
+
+                    b.HasIndex("EmployeeId", "PayPeriodNumber");
+
+                    b.ToTable("TransferRecords");
+                });
+
             modelBuilder.Entity("ListenerApi.Data.Entities.EmployeePayAttributes", b =>
                 {
                     b.HasOne("ListenerApi.Data.Entities.EmployeeRecord", "Employee")
                         .WithOne("PayAttributes")
                         .HasForeignKey("ListenerApi.Data.Entities.EmployeePayAttributes", "EmployeeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+                });
+
+            modelBuilder.Entity("ListenerApi.Data.Entities.TransferRecord", b =>
+                {
+                    b.HasOne("ListenerApi.Data.Entities.EmployeeRecord", "Employee")
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

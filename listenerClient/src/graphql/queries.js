@@ -30,7 +30,27 @@ export const GET_ALL_EMPLOYEES = `
         payPeriodStart
         payPeriodEnd
         payPeriodNumber
+        transferCount
+        transferTotalAmount
       }
+    }
+  }
+`;
+
+export const GET_TRANSFERS_BY_EMPLOYEE = `
+  query GetTransfersByEmployee($employeeId: UUID!) {
+    transfersByEmployeeId(employeeId: $employeeId) {
+      id
+      employeeId
+      amount
+      payPeriodNumber
+      status
+      initiatedAt
+      completedAt
+      failureReason
+      externalReferenceId
+      currentBalance
+      updatedAt
     }
   }
 `;

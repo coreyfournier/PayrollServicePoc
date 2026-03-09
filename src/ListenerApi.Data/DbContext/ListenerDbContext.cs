@@ -10,6 +10,7 @@ public class ListenerDbContext : Microsoft.EntityFrameworkCore.DbContext
 
     public DbSet<EmployeeRecord> EmployeeRecords { get; set; } = null!;
     public DbSet<EmployeePayAttributes> EmployeePayAttributes { get; set; } = null!;
+    public DbSet<TransferRecord> TransferRecords { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -47,6 +48,23 @@ public class ListenerDbContext : Microsoft.EntityFrameworkCore.DbContext
             entity.Property(e => e.PayType).IsRequired().HasMaxLength(10);
             entity.Property(e => e.PayPeriodStart).IsRequired().HasMaxLength(50);
             entity.Property(e => e.PayPeriodEnd).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.TransferTotalAmount).HasPrecision(18, 2);
+        });
+
+        modelBuilder.Entity<TransferRecord>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasOne(e => e.Employee)
+                  .WithMany()
+                  .HasForeignKey(e => e.EmployeeId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.FailureReason).HasMaxLength(500);
+            entity.Property(e => e.CurrentBalance).HasPrecision(18, 2);
+            entity.Property(e => e.ExternalReferenceId).HasMaxLength(100);
+            entity.HasIndex(e => new { e.EmployeeId, e.PayPeriodNumber });
+            entity.HasIndex(e => new { e.EmployeeId, e.InitiatedAt });
         });
     }
 }

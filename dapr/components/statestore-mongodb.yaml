@@ -13,7 +13,7 @@ spec:
     - name: collectionName
       value: "dapr_state"
     - name: actorStateStore
-      value: "false"
+      value: "true"
     # Replica set configuration for transactions
     - name: params
       value: "replicaSet=rs0"

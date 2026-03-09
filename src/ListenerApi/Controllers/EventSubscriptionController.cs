@@ -79,6 +79,55 @@ public class EventSubscriptionController : ControllerBase
         }
     }
 
+    [Dapr.Topic("kafka-pubsub-listener", "transfer-events")]
+    [HttpPost("transfer-events")]
+    public async Task<IActionResult> HandleTransferEvent()
+    {
+        var body = HttpContext.Items["RawBody"] as string ?? string.Empty;
+
+        _logger.LogInformation("Received transfer event, body length={Length}", body.Length);
+
+        try
+        {
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+            TransferEventPayload? eventData = null;
+            using var doc = JsonDocument.Parse(body);
+
+            if (doc.RootElement.TryGetProperty("data", out var dataElement))
+            {
+                if (dataElement.ValueKind == JsonValueKind.String)
+                {
+                    var dataString = dataElement.GetString();
+                    if (!string.IsNullOrEmpty(dataString))
+                        eventData = JsonSerializer.Deserialize<TransferEventPayload>(dataString, options);
+                }
+                else
+                {
+                    eventData = dataElement.Deserialize<TransferEventPayload>(options);
+                }
+            }
+            else
+            {
+                eventData = doc.RootElement.Deserialize<TransferEventPayload>(options);
+            }
+
+            if (eventData == null)
+            {
+                _logger.LogWarning("Failed to deserialize transfer event");
+                return BadRequest("Invalid payload");
+            }
+
+            await _eventProcessor.ProcessTransferEventAsync(eventData);
+            return Ok();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing transfer event, body={Body}", body);
+            return StatusCode(500, "Error processing event");
+        }
+    }
+
     [Dapr.Topic("kafka-pubsub-listener", "employee-net-pay")]
     [HttpPost("employee-net-pay")]
     public async Task<IActionResult> HandleNetPayEvent()

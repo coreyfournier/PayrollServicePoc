@@ -106,9 +106,11 @@ kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-requests
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-events
 
 # Purge non-compacted topics via kafka-delete-records (3 partitions each)
-PURGE_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay"
+PURGE_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay transfer-requests transfer-events"
 python3 -c "
 import json
 topics = '$PURGE_TOPICS'.split()
@@ -136,7 +138,7 @@ log "  Recreated compacted topics (employee-net-pay, employee-search, employee-i
 # (e.g., elasticsearch-updater subscribes to employee-info and employee-net-pay at startup,
 # triggering Kafka auto-creation before seed runs). --alter --partitions is idempotent when
 # the topic already has the target partition count.
-ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay employee-net-pay employee-search employee-info"
+ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay employee-net-pay employee-search employee-info transfer-requests transfer-events"
 for topic in $ALL_TOPICS; do
   kafka-topics --alter --topic $topic --partitions 3 --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 done
@@ -346,6 +348,55 @@ log "  Created David Davis (Salary, 32h) — $EMP5_ID"
 # Small pause to let Dapr outbox flush employee events before time entries
 sleep 2
 
+# ── 2b. Create bank accounts ──────────────────────────────────────────────
+
+log "Creating bank accounts..."
+
+api_post "$API/bankaccounts" -d "{
+  \"employeeId\": \"$EMP1_ID\",
+  \"bankName\": \"Chase Bank\",
+  \"accountNumberMasked\": \"1234\",
+  \"routingNumber\": \"021000021\",
+  \"accountType\": 1
+}" > /dev/null
+log "  John Smith — Chase Bank ****1234"
+
+api_post "$API/bankaccounts" -d "{
+  \"employeeId\": \"$EMP2_ID\",
+  \"bankName\": \"Chase Bank\",
+  \"accountNumberMasked\": \"5678\",
+  \"routingNumber\": \"021000021\",
+  \"accountType\": 1
+}" > /dev/null
+log "  Sarah Johnson — Chase Bank ****5678"
+
+api_post "$API/bankaccounts" -d "{
+  \"employeeId\": \"$EMP3_ID\",
+  \"bankName\": \"Chase Bank\",
+  \"accountNumberMasked\": \"9012\",
+  \"routingNumber\": \"021000021\",
+  \"accountType\": 1
+}" > /dev/null
+log "  Michael Williams — Chase Bank ****9012"
+
+api_post "$API/bankaccounts" -d "{
+  \"employeeId\": \"$EMP4_ID\",
+  \"bankName\": \"Chase Bank\",
+  \"accountNumberMasked\": \"3456\",
+  \"routingNumber\": \"021000021\",
+  \"accountType\": 1
+}" > /dev/null
+log "  Emily Brown — Chase Bank ****3456"
+
+api_post "$API/bankaccounts" -d "{
+  \"employeeId\": \"$EMP5_ID\",
+  \"bankName\": \"Chase Bank\",
+  \"accountNumberMasked\": \"7890\",
+  \"routingNumber\": \"021000021\",
+  \"accountType\": 1
+}" > /dev/null
+log "  David Davis — Chase Bank ****7890"
+
 # ── 3. Create time entries for hourly employees ────────────────────────────
 
 # 4 weeks of Mon-Fri work days (20 days total, spanning 2 pay periods)
@@ -544,6 +595,7 @@ log "  Kafka Connect elasticsearch-sink connector: $CONNECTOR_STATE"
 log ""
 log "Seed complete!"
 log "  5 employees created"
+log "  5 bank accounts created"
 log "  40 time entries created (20 each for Sarah Johnson & Emily Brown)"
 log "  5 tax records created"
 log "  7 deductions created"

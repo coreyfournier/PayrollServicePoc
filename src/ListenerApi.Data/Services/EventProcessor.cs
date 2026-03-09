@@ -9,17 +9,30 @@ public class EventProcessor
 {
     private readonly IEmployeeRecordRepository _repository;
     private readonly IEmployeePayAttributesRepository _payAttributesRepository;
+    private readonly ITransferRecordRepository _transferRecordRepository;
     private readonly ISubscriptionPublisher _subscriptionPublisher;
     private readonly ILogger<EventProcessor> _logger;
+
+    private static readonly Dictionary<string, int> StatusOrder = new()
+    {
+        ["Queued"] = 0,
+        ["Initiated"] = 1,
+        ["AwaitingConfirmation"] = 2,
+        ["Processing"] = 3,
+        ["Completed"] = 4,
+        ["Failed"] = 4
+    };
 
     public EventProcessor(
         IEmployeeRecordRepository repository,
         IEmployeePayAttributesRepository payAttributesRepository,
+        ITransferRecordRepository transferRecordRepository,
         ISubscriptionPublisher subscriptionPublisher,
         ILogger<EventProcessor> logger)
     {
         _repository = repository;
         _payAttributesRepository = payAttributesRepository;
+        _transferRecordRepository = transferRecordRepository;
         _subscriptionPublisher = subscriptionPublisher;
         _logger = logger;
     }
@@ -153,6 +166,118 @@ public class EventProcessor
             await _subscriptionPublisher.PublishPayAttributesChangeAsync(employee);
         }
     }
+
+    public async Task ProcessTransferEventAsync(TransferEventPayload eventData)
+    {
+        var (transferId, employeeId, eventType) = eventData.ResolveTransferInfo();
+
+        _logger.LogInformation("Processing transfer event: {EventType} for transfer {TransferId}, employee {EmployeeId}",
+            eventType, transferId, employeeId);
+
+        var newStatus = eventType switch
+        {
+            "transfer.initiated" => "Initiated",
+            "transfer.balance_changed" => "AwaitingConfirmation",
+            "transfer.processing" => "Processing",
+            "transfer.completed" => "Completed",
+            "transfer.failed" => "Failed",
+            _ => null
+        };
+
+        if (newStatus == null)
+        {
+            _logger.LogWarning("Unknown transfer event type: {EventType}", eventType);
+            return;
+        }
+
+        var existing = await _transferRecordRepository.GetByIdAsync(transferId);
+
+        if (existing != null)
+        {
+            // Idempotency: status only advances forward
+            var existingOrder = StatusOrder.GetValueOrDefault(existing.Status, -1);
+            var newOrder = StatusOrder.GetValueOrDefault(newStatus, -1);
+            if (newOrder <= existingOrder)
+            {
+                _logger.LogInformation("Skipping transfer event — status {NewStatus} not newer than {ExistingStatus}",
+                    newStatus, existing.Status);
+                return;
+            }
+
+            existing.Status = newStatus;
+            existing.UpdatedAt = DateTime.UtcNow;
+
+            if (newStatus == "Completed")
+            {
+                existing.CompletedAt = DateTime.UtcNow;
+                existing.ExternalReferenceId = eventData.ExternalReferenceId;
+            }
+            else if (newStatus == "Failed")
+            {
+                existing.FailureReason = eventData.FailureReason;
+            }
+            else if (newStatus == "AwaitingConfirmation")
+            {
+                existing.CurrentBalance = eventData.CurrentBalance;
+            }
+
+            await _transferRecordRepository.UpdateAsync(existing);
+        }
+        else
+        {
+            // Create new record (transfer originated from payroll-api directly)
+            var record = new Entities.TransferRecord
+            {
+                Id = transferId,
+                EmployeeId = employeeId,
+                Amount = eventData.Amount,
+                PayPeriodNumber = eventData.PayPeriodNumber,
+                Status = newStatus,
+                InitiatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                CompletedAt = newStatus == "Completed" ? DateTime.UtcNow : null,
+                ExternalReferenceId = eventData.ExternalReferenceId,
+                FailureReason = eventData.FailureReason
+            };
+
+            await _transferRecordRepository.AddAsync(record);
+        }
+
+        // Update pay attributes transfer summary on completion
+        if (newStatus == "Completed")
+        {
+            await UpdateTransferSummaryAsync(employeeId, eventData.PayPeriodNumber);
+        }
+
+        // Notify GraphQL subscribers
+        var transferRecord = await _transferRecordRepository.GetByIdAsync(transferId);
+        if (transferRecord != null)
+        {
+            await _subscriptionPublisher.PublishTransferChangeAsync(transferRecord, eventType);
+        }
+    }
+
+    private async Task UpdateTransferSummaryAsync(Guid employeeId, long payPeriodNumber)
+    {
+        var completedTransfers = await _transferRecordRepository.GetByEmployeeAndPayPeriodAsync(employeeId, payPeriodNumber);
+        var completed = completedTransfers.Where(t => t.Status == "Completed").ToList();
+
+        var payAttributes = await _payAttributesRepository.GetByEmployeeIdAsync(employeeId);
+        if (payAttributes != null && payAttributes.PayPeriodNumber == payPeriodNumber)
+        {
+            payAttributes.TransferCount = completed.Count;
+            payAttributes.TransferTotalAmount = completed.Sum(t => t.Amount);
+            payAttributes.UpdatedAt = DateTime.UtcNow;
+            await _payAttributesRepository.UpsertAsync(payAttributes);
+
+            var employee = await _repository.GetByIdAsync(employeeId);
+            if (employee != null)
+            {
+                employee.PayAttributes = payAttributes;
+                await _subscriptionPublisher.PublishPayAttributesChangeAsync(employee);
+            }
+        }
+    }
 }
 
 public class EmployeeEventPayload
@@ -201,6 +326,36 @@ public class DomainEventInfo
     public Guid EventId { get; set; }
     public DateTime OccurredOn { get; set; }
     public string EventType { get; set; } = string.Empty;
+    public decimal? CurrentBalance { get; set; }
+    public decimal? OriginalAmount { get; set; }
+}
+
+public class TransferEventPayload
+{
+    // Transfer entity fields from Dapr outbox (entity state format)
+    public Guid Id { get; set; }
+    public Guid EmployeeId { get; set; }
+    public decimal Amount { get; set; }
+    public long PayPeriodNumber { get; set; }
+    public string? ExternalReferenceId { get; set; }
+    public string? FailureReason { get; set; }
+    public decimal? CurrentBalance { get; set; }
+
+    // Nested domain events
+    public List<DomainEventInfo>? DomainEvents { get; set; }
+
+    public (Guid TransferId, Guid EmployeeId, string EventType) ResolveTransferInfo()
+    {
+        var domainEvent = DomainEvents?.FirstOrDefault();
+        var eventType = domainEvent?.EventType ?? string.Empty;
+        return (Id, EmployeeId, eventType);
+    }
+
+    public decimal? ResolveCurrentBalance()
+    {
+        var domainEvent = DomainEvents?.FirstOrDefault(e => e.EventType == "transfer.balance_changed");
+        return domainEvent?.CurrentBalance;
+    }
 }
 
 public class NetPayEventPayload

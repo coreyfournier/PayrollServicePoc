@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, Mail, Calendar, DollarSign, Clock, FileText,
-  Building, Plus, Edit, Trash2, X, Play, Square
+  Building, Plus, Edit, Trash2, X, Play, Square, Send
 } from 'lucide-react';
 import {
   getEmployee, getTimeEntries, getTaxInfo, getDeductions,
   clockIn, clockOut, createTaxInfo, updateTaxInfo,
   createDeduction, updateDeduction, deleteDeduction, updateTimeEntry,
-  updateEmployee
+  updateEmployee, getTransfers, getBankAccounts, createBankAccount,
+  initiateTransfer, getTransferLimits, acceptTransferBalanceChange
 } from '../api';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -49,6 +50,13 @@ function EmployeeDetail() {
     payRate: '',
     payPeriodHours: 40,
   });
+  const [transfers, setTransfers] = useState([]);
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showBankAccountModal, setShowBankAccountModal] = useState(false);
+  const [transferForm, setTransferForm] = useState({ amount: '', bankAccountId: '', payPeriodNumber: '' });
+  const [bankAccountForm, setBankAccountForm] = useState({ bankName: '', accountNumberMasked: '', routingNumber: '', accountType: 1 });
+  const [transferLimits, setTransferLimits] = useState(null);
 
   const [taxForm, setTaxForm] = useState({
     federalFilingStatus: 'Single',
@@ -73,17 +81,21 @@ function EmployeeDetail() {
 
   const loadAllData = async () => {
     try {
-      const [empRes, timeRes, taxRes, dedRes] = await Promise.all([
+      const [empRes, timeRes, taxRes, dedRes, transferRes, bankRes] = await Promise.all([
         getEmployee(id),
         getTimeEntries(id),
         getTaxInfo(id).catch(() => ({ data: null })),
         getDeductions(id),
+        getTransfers(id).catch(() => ({ data: [] })),
+        getBankAccounts(id).catch(() => ({ data: [] })),
       ]);
 
       setEmployee(empRes.data);
       setTimeEntries(timeRes.data);
       setTaxInfo(taxRes.data);
       setDeductions(dedRes.data);
+      setTransfers(transferRes.data);
+      setBankAccounts(bankRes.data);
 
       // Check if currently clocked in
       const activeEntry = timeRes.data.find(e => !e.clockOut);
@@ -276,6 +288,47 @@ function EmployeeDetail() {
     return timeEntries.reduce((sum, entry) => sum + entry.hoursWorked, 0).toFixed(2);
   };
 
+  const handleOpenTransferModal = async () => {
+    if (bankAccounts.length === 0) {
+      alert('Please add a bank account first.');
+      return;
+    }
+    setTransferForm({ amount: '', bankAccountId: bankAccounts[0]?.id || '', payPeriodNumber: '' });
+    setShowTransferModal(true);
+  };
+
+  const handleInitiateTransfer = async (e) => {
+    e.preventDefault();
+    try {
+      await initiateTransfer({
+        employeeId: id,
+        amount: parseFloat(transferForm.amount),
+        payPeriodNumber: parseInt(transferForm.payPeriodNumber),
+        bankAccountId: transferForm.bankAccountId,
+      });
+      setShowTransferModal(false);
+      loadAllData();
+    } catch (error) {
+      console.error('Error initiating transfer:', error);
+      alert(error.response?.data?.errorMessage || error.response?.data?.reasons?.join(' ') || 'Error initiating transfer');
+    }
+  };
+
+  const handleSaveBankAccount = async (e) => {
+    e.preventDefault();
+    try {
+      await createBankAccount({
+        employeeId: id,
+        ...bankAccountForm,
+        accountType: parseInt(bankAccountForm.accountType),
+      });
+      setShowBankAccountModal(false);
+      loadAllData();
+    } catch (error) {
+      console.error('Error creating bank account:', error);
+    }
+  };
+
   if (loading) {
     return (
       <div className="loading">
@@ -359,6 +412,12 @@ function EmployeeDetail() {
             onClick={() => setActiveTab('deductions')}
           >
             Deductions
+          </button>
+          <button
+            className={`tab ${activeTab === 'transfers' ? 'active' : ''}`}
+            onClick={() => setActiveTab('transfers')}
+          >
+            Transfers
           </button>
         </div>
 
@@ -577,6 +636,123 @@ function EmployeeDetail() {
                     <DollarSign />
                     <h3>No deductions</h3>
                     <p>Click "Add Deduction" to configure payroll deductions.</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {activeTab === 'transfers' && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
+                <button className="btn btn-secondary btn-sm" onClick={() => setShowBankAccountModal(true)}>
+                  <Plus /> Add Bank Account
+                </button>
+                <button className="btn btn-primary btn-sm" onClick={handleOpenTransferModal}>
+                  <Send /> New Transfer
+                </button>
+              </div>
+
+              {bankAccounts.length > 0 && (
+                <div style={{ marginBottom: '24px' }}>
+                  <h4 style={{ fontSize: '14px', color: '#64748b', marginBottom: '8px' }}>Bank Accounts</h4>
+                  <div className="table-container">
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>Bank</th>
+                          <th>Account</th>
+                          <th>Routing</th>
+                          <th>Type</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {bankAccounts.map((acct) => (
+                          <tr key={acct.id}>
+                            <td>{acct.bankName}</td>
+                            <td>****{acct.accountNumberMasked}</td>
+                            <td>{acct.routingNumber}</td>
+                            <td>{acct.accountType === 1 ? 'Checking' : 'Savings'}</td>
+                            <td>
+                              <span className={`badge ${acct.isActive ? 'badge-success' : 'badge-danger'}`}>
+                                {acct.isActive ? 'Active' : 'Inactive'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <h4 style={{ fontSize: '14px', color: '#64748b', marginBottom: '8px' }}>Transfer History</h4>
+              <div className="table-container">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Amount</th>
+                      <th>Pay Period</th>
+                      <th>Status</th>
+                      <th>Reference</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {transfers.map((t) => {
+                      const status = typeof t.status === 'number'
+                        ? ['', 'Initiated', 'Processing', 'Completed', 'Failed', 'AwaitingConfirmation'][t.status]
+                        : t.status;
+                      const isAwaiting = status === 'AwaitingConfirmation';
+                      return (
+                      <tr key={t.id}>
+                        <td>{format(new Date(t.initiatedAt), 'MMM d, yyyy h:mm a')}</td>
+                        <td>${t.amount.toFixed(2)}</td>
+                        <td>{t.payPeriodNumber}</td>
+                        <td>
+                          <span className={`badge ${
+                            status === 'Completed' ? 'badge-success' :
+                            status === 'Failed' ? 'badge-danger' :
+                            isAwaiting ? 'badge-info' :
+                            'badge-warning'
+                          }`}>
+                            {isAwaiting ? 'Awaiting Confirmation' : status}
+                          </span>
+                          {isAwaiting && t.currentBalance != null && (
+                            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
+                              Balance dropped to ${t.currentBalance.toFixed(2)}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {isAwaiting ? (
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button className="btn btn-sm btn-primary" onClick={async () => {
+                                await acceptTransferBalanceChange(t.id, true);
+                                const res = await getTransfers(id);
+                                setTransfers(res.data);
+                              }}>Accept</button>
+                              <button className="btn btn-sm btn-danger" onClick={async () => {
+                                await acceptTransferBalanceChange(t.id, false);
+                                const res = await getTransfers(id);
+                                setTransfers(res.data);
+                              }}>Reject</button>
+                            </div>
+                          ) : (
+                            t.externalReferenceId || t.failureReason || '-'
+                          )}
+                        </td>
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {transfers.length === 0 && (
+                  <div className="empty-state">
+                    <Send />
+                    <h3>No transfers</h3>
+                    <p>Click "New Transfer" to initiate a transfer.</p>
                   </div>
                 )}
               </div>
@@ -903,6 +1079,135 @@ function EmployeeDetail() {
                   </button>
                   <button type="submit" className="btn btn-primary">
                     Save Changes
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTransferModal && (
+        <div className="modal-overlay" onClick={() => setShowTransferModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Initiate Transfer</h3>
+              <button className="modal-close" onClick={() => setShowTransferModal(false)}>
+                <X />
+              </button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handleInitiateTransfer}>
+                <div className="form-group">
+                  <label className="form-label">Amount ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="form-input"
+                    value={transferForm.amount}
+                    onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Pay Period Number</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    value={transferForm.payPeriodNumber}
+                    onChange={(e) => setTransferForm({ ...transferForm, payPeriodNumber: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Bank Account</label>
+                  <select
+                    className="form-select"
+                    value={transferForm.bankAccountId}
+                    onChange={(e) => setTransferForm({ ...transferForm, bankAccountId: e.target.value })}
+                  >
+                    {bankAccounts.filter(a => a.isActive).map((acct) => (
+                      <option key={acct.id} value={acct.id}>
+                        {acct.bankName} - ****{acct.accountNumberMasked}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-actions">
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowTransferModal(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    Initiate Transfer
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBankAccountModal && (
+        <div className="modal-overlay" onClick={() => setShowBankAccountModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Add Bank Account</h3>
+              <button className="modal-close" onClick={() => setShowBankAccountModal(false)}>
+                <X />
+              </button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handleSaveBankAccount}>
+                <div className="form-group">
+                  <label className="form-label">Bank Name</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={bankAccountForm.bankName}
+                    onChange={(e) => setBankAccountForm({ ...bankAccountForm, bankName: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label className="form-label">Account Number (last 4)</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      maxLength={4}
+                      value={bankAccountForm.accountNumberMasked}
+                      onChange={(e) => setBankAccountForm({ ...bankAccountForm, accountNumberMasked: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Routing Number</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={bankAccountForm.routingNumber}
+                      onChange={(e) => setBankAccountForm({ ...bankAccountForm, routingNumber: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Account Type</label>
+                  <select
+                    className="form-select"
+                    value={bankAccountForm.accountType}
+                    onChange={(e) => setBankAccountForm({ ...bankAccountForm, accountType: parseInt(e.target.value) })}
+                  >
+                    <option value={1}>Checking</option>
+                    <option value={2}>Savings</option>
+                  </select>
+                </div>
+                <div className="form-actions">
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowBankAccountModal(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    Add Bank Account
                   </button>
                 </div>
               </form>
