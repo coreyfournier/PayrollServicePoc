@@ -13,8 +13,6 @@ public static class StateKeyHelper
     public static string GetTimeEntryKey(Guid id) => GetKey("timeentry", id);
     public static string GetTaxInformationKey(Guid id) => GetKey("taxinformation", id);
     public static string GetDeductionKey(Guid id) => GetKey("deduction", id);
-    public static string GetTransferKey(Guid id) => GetKey("transfer", id);
-    public static string GetBankAccountKey(Guid id) => GetKey("bankaccount", id);
 
     public static (string EntityType, Guid EntityId) ParseKey(string key)
     {

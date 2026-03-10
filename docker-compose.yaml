@@ -393,10 +393,6 @@ services:
       - MongoDB__ConnectionString=mongodb://mongodb:27017/?replicaSet=rs0
       - MongoDB__DatabaseName=payroll_db
       - Features__UseDaprOutbox=true
-      # Transfer limits
-      - TransferLimits__MaxPerPayPeriod=5
-      - TransferLimits__MaxAmountPerPayPeriod=10000
-      - TransferLimits__MaxPerDay=1
       # Dapr sidecar endpoint configuration
       - DAPR_HTTP_ENDPOINT=http://payroll-api-dapr:3500
       - DAPR_GRPC_ENDPOINT=http://payroll-api-dapr:50001
@@ -460,8 +456,6 @@ services:
       "-app-channel-address", "payroll-api",
       "-dapr-http-port", "3500",
       "-dapr-grpc-port", "50001",
-      "-placement-host-address", "placement:50006",
-      "-scheduler-host-address", "scheduler:50006",
       "-resources-path", "/components",
       "-config", "/config/config.yaml"
     ]
@@ -478,6 +472,77 @@ services:
           memory: 128M
     depends_on:
       payroll-api:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks:
+      - payroll-network
+
+  # Transfer API Service
+  transfer-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.transferapi
+    container_name: transfer-api
+    ports:
+      - "5002:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - MongoDB__ConnectionString=mongodb://mongodb:27017/?replicaSet=rs0
+      - MongoDB__DatabaseName=transfer_db
+      - TransferLimits__MaxPerPayPeriod=5
+      - TransferLimits__MaxAmountPerPayPeriod=10000
+      - TransferLimits__MaxPerDay=1
+      - DAPR_HTTP_ENDPOINT=http://transfer-api-dapr:3502
+      - DAPR_GRPC_ENDPOINT=http://transfer-api-dapr:50003
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - payroll-network
+    healthcheck:
+      test: curl -sf http://localhost:80/api/transfers/employee/00000000-0000-0000-0000-000000000000 || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # Dapr sidecar for Transfer API
+  transfer-api-dapr:
+    image: "daprio/daprd:1.16.0"
+    container_name: transfer-api-dapr
+    command: [
+      "./daprd",
+      "-app-id", "transfer-api",
+      "-app-port", "80",
+      "-app-channel-address", "transfer-api",
+      "-dapr-http-port", "3502",
+      "-dapr-grpc-port", "50003",
+      "-placement-host-address", "placement:50006",
+      "-scheduler-host-address", "scheduler:50006",
+      "-resources-path", "/components",
+      "-config", "/config/config.yaml"
+    ]
+    volumes:
+      - ./dapr/components-transfer:/components
+      - ./dapr:/config
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    depends_on:
+      transfer-api:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -505,6 +570,8 @@ services:
           memory: 64M
     depends_on:
       payroll-api:
+        condition: service_healthy
+      transfer-api:
         condition: service_healthy
     networks:
       - payroll-network
@@ -602,6 +669,8 @@ services:
       payroll-api:
         condition: service_healthy
       listener-api:
+        condition: service_healthy
+      transfer-api:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy

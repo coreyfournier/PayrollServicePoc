@@ -1,0 +1,26 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore-transfers
+spec:
+  type: state.mongodb
+  version: v1
+  metadata:
+    - name: host
+      value: "mongodb:27017"
+    - name: databaseName
+      value: "transfer_db"
+    - name: collectionName
+      value: "dapr_transfer_state"
+    - name: actorStateStore
+      value: "true"
+    # Replica set configuration for transactions
+    - name: params
+      value: "replicaSet=rs0"
+    # Outbox configuration - publishes transfer events to a dedicated topic
+    - name: outboxPublishPubsub
+      value: "kafka-pubsub"
+    - name: outboxPublishTopic
+      value: "transfer-events"
+    - name: outboxDiscardWhenMissingState
+      value: "false"

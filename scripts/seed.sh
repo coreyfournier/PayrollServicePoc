@@ -21,6 +21,7 @@ elif path.startswith('.'):
 }
 
 API="http://payroll-api:80/api"
+TRANSFER_API="http://transfer-api:80/api"
 LISTENER="http://listener-api:80"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -60,6 +61,21 @@ python3 << 'PYEOF'
 from pymongo import MongoClient
 client = MongoClient('mongodb://mongodb:27017/?replicaSet=rs0&directConnection=true')
 db = client['payroll_db']
+collections = db.list_collection_names()
+if collections:
+    for col in collections:
+        db.drop_collection(col)
+        print(f"  Dropped collection: {col}")
+else:
+    print("  No collections to drop")
+client.close()
+PYEOF
+
+log "Clearing MongoDB (transfer_db)..."
+python3 << 'PYEOF'
+from pymongo import MongoClient
+client = MongoClient('mongodb://mongodb:27017/?replicaSet=rs0&directConnection=true')
+db = client['transfer_db']
 collections = db.list_collection_names()
 if collections:
     for col in collections:
@@ -350,9 +366,15 @@ sleep 2
 
 # ── 2b. Create bank accounts ──────────────────────────────────────────────
 
+log "Waiting for Transfer API..."
+until curl -sf "http://transfer-api:80/api/bankaccounts/employee/00000000-0000-0000-0000-000000000000" > /dev/null 2>&1; do
+  sleep 2
+done
+log "  Transfer API is ready."
+
 log "Creating bank accounts..."
 
-api_post "$API/bankaccounts" -d "{
+api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP1_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"1234\",
@@ -361,7 +383,7 @@ api_post "$API/bankaccounts" -d "{
 }" > /dev/null
 log "  John Smith — Chase Bank ****1234"
 
-api_post "$API/bankaccounts" -d "{
+api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP2_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"5678\",
@@ -370,7 +392,7 @@ api_post "$API/bankaccounts" -d "{
 }" > /dev/null
 log "  Sarah Johnson — Chase Bank ****5678"
 
-api_post "$API/bankaccounts" -d "{
+api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP3_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"9012\",
@@ -379,7 +401,7 @@ api_post "$API/bankaccounts" -d "{
 }" > /dev/null
 log "  Michael Williams — Chase Bank ****9012"
 
-api_post "$API/bankaccounts" -d "{
+api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP4_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"3456\",
@@ -388,7 +410,7 @@ api_post "$API/bankaccounts" -d "{
 }" > /dev/null
 log "  Emily Brown — Chase Bank ****3456"
 
-api_post "$API/bankaccounts" -d "{
+api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP5_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"7890\",

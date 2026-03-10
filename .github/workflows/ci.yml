@@ -26,8 +26,11 @@ jobs:
       - name: Build
         run: dotnet build PayrollService.sln --no-restore
 
-      - name: Unit Tests
-        run: dotnet test tests/PayrollService.UnitTests/ --no-build --logger "trx;LogFileName=results.trx"
+      - name: Unit Tests - PayrollService
+        run: dotnet test tests/PayrollService.UnitTests/ --no-build --logger "trx;LogFileName=payroll-results.trx"
+
+      - name: Unit Tests - TransferService
+        run: dotnet test tests/TransferService.UnitTests/ --no-build --logger "trx;LogFileName=transfer-results.trx"
 
   frontend:
     name: Frontend Build & Test

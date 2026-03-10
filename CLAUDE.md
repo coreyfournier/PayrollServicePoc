@@ -49,7 +49,12 @@ The seed service is the **single initialization entry point** — it creates Kaf
 
 The `kafka-init` and `ksqldb-init` services are available standalone under the `init` profile (`docker-compose --profile init up kafka-init`) but do not auto-start — seed handles everything.
 
-### No test suite exists yet.
+### Running tests
+```bash
+dotnet test tests/PayrollService.UnitTests/        # 32 payroll domain/application tests
+dotnet test tests/TransferService.UnitTests/        # 18 transfer domain tests
+cd frontend && npm test                             # 63 frontend component/hook tests
+```
 
 ## Architecture
 
@@ -65,6 +70,23 @@ Api (.NET 9.0)  →  Application (.NET 7.0)  →  Domain (.NET 7.0)
 - **Application**: MediatR CQRS — commands for writes, queries for reads, DTOs for API boundaries.
 - **Infrastructure**: MongoDB persistence, Dapr state store integration, event publishing. Contains `DependencyInjection.cs` for all service registration.
 - **Api**: ASP.NET Core controllers, Swagger UI at `/swagger`.
+
+### DDD Layers (TransferService.*)
+
+```
+Api (.NET 9.0)  →  Application (.NET 7.0)  →  Domain (.NET 7.0)
+                                                      ↑
+                                            Infrastructure (.NET 7.0)
+```
+
+Separate bounded context for bank transfers, extracted from PayrollService. Has its own MongoDB database (`transfer_db`), Dapr state store (`statestore-transfers`), and Dapr components (`dapr/components-transfer/`).
+
+- **Domain**: Entities (`Transfer`, `BankAccount`), value objects (`TransferLimits`), domain events, repository interfaces.
+- **Application**: MediatR CQRS — transfer initiation, bank account CRUD, transfer limits queries.
+- **Infrastructure**: Separate `TransferMongoDbContext`, Dapr state store with outbox publishing to `transfer-events` topic, ksqlDB balance service, simulated bank service.
+- **Api**: ASP.NET Core controllers, Dapr Actors (keyed by employeeId), Dapr Workflows (balance verification, bank transfer with retries). Runs on port 5002.
+
+The frontend nginx config routes `/api/transfers/` and `/api/bankaccounts/` to `transfer-api`, all other `/api/` requests to `payroll-api`.
 
 ### Two Unit-of-Work Implementations
 
@@ -100,6 +122,7 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 | Service | Port | Notes |
 |---------|------|-------|
 | payroll-api | 5000 | Swagger at /swagger |
+| transfer-api | 5002 | Swagger at /swagger, transfers & bank accounts |
 | listener-api | 5001 | GraphQL at /graphql |
 | frontend | 3000 | REST client |
 | listener-client | 3001 | GraphQL client |
@@ -119,7 +142,7 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 
 ### Dapr Sidecars
 
-Both Dapr sidecars (`payroll-api-dapr`, `listener-api-dapr`) run as separate containers on `payroll-network` with `-app-channel-address` pointing at their app's service name. This ensures Docker DNS resolves the app across container restarts. **Do not use `network_mode: "service:..."` for sidecars** — it shares the app's network namespace, so when the app restarts the sidecar loses DNS and Kafka connectivity permanently until manually restarted.
+All three Dapr sidecars (`payroll-api-dapr`, `listener-api-dapr`, `transfer-api-dapr`) run as separate containers on `payroll-network` with `-app-channel-address` pointing at their app's service name. This ensures Docker DNS resolves the app across container restarts. **Do not use `network_mode: "service:..."` for sidecars** — it shares the app's network namespace, so when the app restarts the sidecar loses DNS and Kafka connectivity permanently until manually restarted.
 
 ### Kafka Topics
 
@@ -276,49 +299,93 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 
 ### Transfer Workflow
 
-The transfer feature demonstrates several advanced architecture patterns:
+The transfer feature is a **separate bounded context** (`TransferService.*`) with its own database (`transfer_db`), Dapr state store, and Dapr sidecar. It demonstrates several advanced architecture patterns.
 
-**Async Command Pattern (CQRS across services):**
+**End-to-End Data Flow:**
 ```
-ListenerClient → ListenerApi → Kafka (transfer-requests) → Payroll-api → Actor → Workflow
-                      ↑                                                        ↓
-                    MySQL ←── Kafka (transfer-events) ←─────────────────────────┘
-                 (read model)
+Client (REST/GraphQL)
+  │
+  ├─► Direct: POST transfer-api:5002/api/Transfers
+  │     └─► TransferActor (keyed by employeeId, single-threaded)
+  │           ├─ Validate bank account ownership
+  │           ├─ Check transfer limits (daily/period count/amount)
+  │           ├─ Create Transfer entity → DaprTransferStateStoreUnitOfWork
+  │           │    ├─ Dapr state store transaction (entity + outbox) ─► Kafka (transfer-events)
+  │           │    └─ MongoDB transfer_db (best-effort read model)
+  │           └─ Schedule TransferWorkflow
+  │
+  └─► Async: ListenerApi → Kafka (transfer-requests) → transfer-api subscription
+        └─► Same actor path as above
+
+TransferWorkflow (Durable Task Framework):
+  1. ValidateTransferActivity — verify transfer exists
+  2. VerifyBalanceActivity — query ksqlDB for employee net pay
+  │   ├─ Balance sufficient → continue
+  │   └─ Balance insufficient → MarkAwaitingConfirmationActivity
+  │       └─ WaitForExternalEvent("BalanceAccepted", 24h timeout)
+  │           ├─ Accepted → continue
+  │           └─ Rejected/timeout → FailTransferActivity
+  3. UpdateTransferStatusActivity — mark Processing
+  4. ExecuteBankTransferActivity — call SimulatedBankService
+  │   └─ Retry up to 3× with exponential backoff (2s, 4s, 8s)
+  5. CompleteTransferActivity or FailTransferActivity
+  │
+  Each state change → DaprTransferStateStoreUnitOfWork → Kafka (transfer-events)
+                                                              │
+                                                              ▼
+                                                    ListenerApi (Dapr subscription)
+                                                         │
+                                                         ▼
+                                                    MySQL listener_db.TransferRecords
+                                                         │
+                                                         ▼
+                                                    GraphQL subscription → ListenerClient
 ```
 
-- ListenerApi persists a `TransferRequest` to MySQL (status: Queued) and publishes to `transfer-requests` Kafka topic via Dapr pub/sub. The client sees the transfer immediately on refresh regardless of payroll-api availability.
-- Payroll-api subscribes to `transfer-requests`, processes through a Dapr Actor + Workflow.
-- Transfer events flow back on a dedicated `transfer-events` topic (via `statestore-transfers.yaml` component) → ListenerApi updates the transfer record → GraphQL subscription notifies the client.
+**Two Databases:**
+- **transfer_db** (MongoDB) — authoritative transfer and bank account data, written atomically via Dapr state store outbox. Collections: `transfers`, `bank_accounts`, `dapr_transfer_state`.
+- **listener_db.TransferRecords** (MySQL) — read model materialized from Kafka `transfer-events` topic via ListenerApi. Used for client queries and GraphQL subscriptions.
 
 **Dapr Actors for Concurrency Control:**
 - `TransferActor` is keyed by employeeId. Dapr Actors guarantee single-threaded execution per actor ID, eliminating concurrent transfer races without manual locking.
 - The actor checks transfer limits (per pay period count, per period amount, per day count), creates the Transfer entity atomically, then starts the Dapr Workflow.
 
 **Dapr Workflow (Durable Task Framework):**
-- `TransferWorkflow` orchestrates: validate → mark processing → call simulated bank → complete/fail.
+- `TransferWorkflow` orchestrates: validate → verify balance → mark processing → call simulated bank → complete/fail.
 - Retries bank transfer up to 3 times with exponential backoff.
 - Each state change persists via `DaprTransferStateStoreUnitOfWork` (outbox → `transfer-events` topic).
+- Balance verification queries ksqlDB for the employee's current net pay. If the transfer amount exceeds net pay, the workflow pauses and waits for client confirmation (up to 24 hours).
 
 **Transfer Limits:**
 - Configurable via environment variables: `TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`.
-- Payroll-api enforces authoritatively inside the actor. ListenerApi does a best-effort pre-check from its own materialized MySQL data.
+- Transfer-api enforces authoritatively inside the actor. ListenerApi does a best-effort pre-check from its own materialized MySQL data.
 - The `GET /api/transfers/employee/{id}/limits` endpoint returns limits + current usage + `canTransfer` boolean.
 
 **Simulated Bank Service:**
 - `SimulatedBankService` adds random delays (1-10s) and ~20% failure rate to test the retry workflow.
 
+**Dapr Components (dapr/components-transfer/):**
+- `statestore-transfers.yaml` — MongoDB state store pointed at `transfer_db`, with `actorStateStore: "true"` and outbox publishing to `transfer-events` topic via `kafka-pubsub`.
+- `kafka-pubsub.yaml` — Kafka pub/sub with `consumerGroup: transfer-service-group` (separate from payroll-api's consumer group).
+
+**Docker Services:**
+- `transfer-api` (port 5002) — TransferService.Api container, depends on MongoDB and Kafka.
+- `transfer-api-dapr` — Dapr sidecar for transfer-api, with placement and scheduler connections for actor/workflow support. Uses `/components-transfer` volume.
+
 **Key Files:**
-- `src/PayrollService.Api/Actors/TransferActor.cs` — Dapr Actor for concurrency control
-- `src/PayrollService.Api/Workflows/TransferWorkflow.cs` — Dapr Workflow orchestration
-- `src/PayrollService.Infrastructure/StateStore/DaprTransferStateStoreUnitOfWork.cs` — transfer-specific outbox
-- `src/PayrollService.Infrastructure/ExternalServices/SimulatedBankService.cs` — simulated bank
+- `src/TransferService.Api/Actors/TransferActor.cs` — Dapr Actor for concurrency control
+- `src/TransferService.Api/Workflows/TransferWorkflow.cs` — Dapr Workflow orchestration
+- `src/TransferService.Api/Workflows/Activities/` — 7 workflow activities
+- `src/TransferService.Infrastructure/StateStore/DaprStateStoreUnitOfWork.cs` — transfer-specific outbox
+- `src/TransferService.Infrastructure/ExternalServices/SimulatedBankService.cs` — simulated bank
+- `src/TransferService.Infrastructure/ExternalServices/KsqlDbBalanceService.cs` — ksqlDB balance queries
 - `src/ListenerApi/Controllers/TransferController.cs` — async command initiation + queries
-- `dapr/components/statestore-transfers.yaml` — dedicated state store for transfer-events topic
+- `dapr/components-transfer/statestore-transfers.yaml` — dedicated state store for transfer-events topic
 
 ### Kafka Topics (Transfers)
 
-- `transfer-requests` — async commands from ListenerApi to payroll-api
-- `transfer-events` — transfer state changes from payroll-api to ListenerApi (via Dapr outbox)
+- `transfer-requests` — async commands from ListenerApi to transfer-api
+- `transfer-events` — transfer state changes from transfer-api to ListenerApi (via Dapr outbox)
 
 ### Key Files
 
@@ -335,11 +402,15 @@ ListenerClient → ListenerApi → Kafka (transfer-requests) → Payroll-api →
 - `src/NetPayProcessor/` — Kafka Streams Java app for net pay calculation
 - `src/ElasticsearchUpdater/` — Kafka consumer Java app combining employee info + net pay for Elasticsearch
 - `docker/Dockerfile.kafka-connect` — Kafka Connect image with Elasticsearch connector
-- `src/PayrollService.Api/Actors/TransferActor.cs` — Dapr Actor for transfer concurrency
-- `src/PayrollService.Api/Workflows/TransferWorkflow.cs` — transfer workflow orchestration
-- `src/PayrollService.Domain/Entities/Transfer.cs` — transfer domain entity
-- `src/PayrollService.Domain/Entities/BankAccount.cs` — bank account domain entity
-- `dapr/components/statestore-transfers.yaml` — transfer-specific Dapr state store with outbox
+- `src/TransferService.Api/Program.cs` — TransferService DI, Dapr workflow/actor registration
+- `src/TransferService.Api/Actors/TransferActor.cs` — Dapr Actor for transfer concurrency
+- `src/TransferService.Api/Workflows/TransferWorkflow.cs` — transfer workflow orchestration
+- `src/TransferService.Domain/Entities/Transfer.cs` — transfer domain entity
+- `src/TransferService.Domain/Entities/BankAccount.cs` — bank account domain entity
+- `src/TransferService.Infrastructure/DependencyInjection.cs` — transfer infrastructure registration
+- `dapr/components-transfer/statestore-transfers.yaml` — transfer-specific Dapr state store with outbox
+- `dapr/components-transfer/kafka-pubsub.yaml` — transfer service Kafka pub/sub
+- `docker/Dockerfile.transferapi` — TransferService.Api Dockerfile
 
 ## Known Issues
 

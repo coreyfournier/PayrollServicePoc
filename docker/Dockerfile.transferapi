@@ -1,0 +1,23 @@
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS base
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+EXPOSE 80
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY ["src/TransferService.Api/TransferService.Api.csproj", "TransferService.Api/"]
+COPY ["src/TransferService.Application/TransferService.Application.csproj", "TransferService.Application/"]
+COPY ["src/TransferService.Domain/TransferService.Domain.csproj", "TransferService.Domain/"]
+COPY ["src/TransferService.Infrastructure/TransferService.Infrastructure.csproj", "TransferService.Infrastructure/"]
+RUN dotnet restore "TransferService.Api/TransferService.Api.csproj"
+COPY src/ .
+WORKDIR "/src/TransferService.Api"
+RUN dotnet build "TransferService.Api.csproj" -c Release -o /app/build
+
+FROM build AS publish
+RUN dotnet publish "TransferService.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+ENTRYPOINT ["dotnet", "TransferService.Api.dll"]

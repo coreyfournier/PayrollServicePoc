@@ -58,18 +58,6 @@ public class MongoDbContext
             RegisterClassMap<EmployeeClockedOutEvent>();
             RegisterClassMap<TimeEntryUpdatedEvent>();
 
-            // Transfer events
-            RegisterClassMap<TransferInitiatedEvent>();
-            RegisterClassMap<TransferProcessingEvent>();
-            RegisterClassMap<TransferCompletedEvent>();
-            RegisterClassMap<TransferFailedEvent>();
-            RegisterClassMap<TransferBalanceChangedEvent>();
-
-            // Bank account events
-            RegisterClassMap<BankAccountCreatedEvent>();
-            RegisterClassMap<BankAccountUpdatedEvent>();
-            RegisterClassMap<BankAccountDeactivatedEvent>();
-
             // Configure ObjectSerializer to allow all types (needed for 'object' typed properties)
             var objectSerializer = new ObjectSerializer(type => ObjectSerializer.AllAllowedTypes(type));
             BsonSerializer.RegisterSerializer(objectSerializer);
@@ -94,8 +82,6 @@ public class MongoDbContext
     public IMongoCollection<TimeEntry> TimeEntries => _database.GetCollection<TimeEntry>("time_entries");
     public IMongoCollection<TaxInformation> TaxInformation => _database.GetCollection<TaxInformation>("tax_information");
     public IMongoCollection<Deduction> Deductions => _database.GetCollection<Deduction>("deductions");
-    public IMongoCollection<Transfer> Transfers => _database.GetCollection<Transfer>("transfers");
-    public IMongoCollection<BankAccount> BankAccounts => _database.GetCollection<BankAccount>("bank_accounts");
     public IMongoCollection<OutboxMessage> OutboxMessages => _database.GetCollection<OutboxMessage>("outbox_messages");
 
     public async Task InitializeAsync()
@@ -116,20 +102,6 @@ public class MongoDbContext
         await OutboxMessages.Indexes.CreateOneAsync(
             new CreateIndexModel<OutboxMessage>(Builders<OutboxMessage>.IndexKeys.Ascending(o => o.ProcessedAt)));
 
-        await Transfers.Indexes.CreateManyAsync(new[]
-        {
-            new CreateIndexModel<Transfer>(
-                Builders<Transfer>.IndexKeys
-                    .Ascending(t => t.EmployeeId)
-                    .Ascending(t => t.PayPeriodNumber)),
-            new CreateIndexModel<Transfer>(
-                Builders<Transfer>.IndexKeys
-                    .Ascending(t => t.EmployeeId)
-                    .Ascending(t => t.InitiatedAt))
-        });
-
-        await BankAccounts.Indexes.CreateOneAsync(
-            new CreateIndexModel<BankAccount>(Builders<BankAccount>.IndexKeys.Ascending(a => a.EmployeeId)));
     }
 }
 
