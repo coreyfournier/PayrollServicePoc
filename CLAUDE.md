@@ -127,7 +127,7 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 | frontend | 3000 | REST client |
 | listener-client | 3001 | GraphQL client |
 | kafka | 9092 (internal), 29092 (host) | |
-| kafka-ui | 8080 | Also has ksqlDB query UI |
+| kafka-ui | 8089 | Also has ksqlDB query UI |
 | ksqldb-server | 8088 | REST API |
 | mongodb | 27017 | Replica set, connect with `?directConnection=true` |
 | mysql | 3306 | |
@@ -196,7 +196,7 @@ employee-net-pay topic (produced by NetPayProcessor)
 **Init behavior:** The seed script (and standalone `ksqldb-init` if run via `--profile init`) terminates all running queries before executing DROP/CREATE statements, making it safe for re-runs.
 
 **Querying ksqlDB:**
-- Kafka UI at http://localhost:8080 (KSQL DB tab in sidebar)
+- Kafka UI at http://localhost:8089 (KSQL DB tab in sidebar)
 - CLI: `docker exec -it ksqldb-server ksql http://localhost:8088`
 - REST: `curl http://localhost:8088/ksql -H 'Content-Type: application/vnd.ksql.v1+json' -d '{"ksql": "SHOW TABLES;"}'`
 
