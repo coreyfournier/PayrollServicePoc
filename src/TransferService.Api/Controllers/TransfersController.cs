@@ -40,6 +40,13 @@ public class TransfersController : ControllerBase
         return Accepted(result);
     }
 
+    [HttpGet("recent")]
+    public async Task<ActionResult<IEnumerable<TransferDto>>> GetRecent([FromQuery] int limit = 50, [FromQuery] string? status = null)
+    {
+        var result = await _mediator.Send(new GetRecentTransfersQuery(limit, status));
+        return Ok(result);
+    }
+
     [HttpGet("employee/{employeeId:guid}")]
     public async Task<ActionResult<IEnumerable<TransferDto>>> GetByEmployee(Guid employeeId)
     {
@@ -62,6 +69,40 @@ public class TransfersController : ControllerBase
     {
         var result = await _mediator.Send(new GetTransferLimitsQuery(employeeId, payPeriodNumber));
         return Ok(result);
+    }
+
+    [HttpGet("{id:guid}/workflow")]
+    public async Task<ActionResult> GetWorkflowState(Guid id)
+    {
+        var workflowId = $"transfer-{id}";
+        try
+        {
+            var state = await _workflowClient.GetWorkflowStateAsync(workflowId);
+            if (state == null || !state.Exists)
+                return NotFound(new { error = "Workflow not found" });
+
+            object? input = null;
+            object? output = null;
+            object? failureDetails = null;
+            try { input = state.ReadInputAs<object>(); } catch { }
+            try { output = state.ReadOutputAs<object>(); } catch { }
+            try { failureDetails = state.FailureDetails; } catch { }
+
+            return Ok(new
+            {
+                instanceId = workflowId,
+                runtimeStatus = state.RuntimeStatus.ToString(),
+                createdAt = state.CreatedAt,
+                lastUpdatedAt = state.LastUpdatedAt,
+                input,
+                output,
+                failureDetails,
+            });
+        }
+        catch (Exception ex)
+        {
+            return NotFound(new { error = $"Workflow not found: {ex.Message}" });
+        }
     }
 
     [HttpPost("{id:guid}/accept")]

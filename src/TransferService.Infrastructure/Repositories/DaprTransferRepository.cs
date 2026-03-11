@@ -62,6 +62,24 @@ public class DaprTransferRepository : ITransferRepository
             .CountDocumentsAsync(t => t.EmployeeId == employeeId && t.InitiatedAt >= date && t.InitiatedAt < nextDay, cancellationToken: cancellationToken);
     }
 
+    public async Task<IEnumerable<Transfer>> GetRecentAsync(int limit = 50, string? statusFilter = null, CancellationToken cancellationToken = default)
+    {
+        var filterBuilder = Builders<Transfer>.Filter;
+        var filter = filterBuilder.Empty;
+
+        if (!string.IsNullOrEmpty(statusFilter))
+        {
+            var status = Enum.Parse<Domain.Enums.TransferStatus>(statusFilter, ignoreCase: true);
+            filter = filterBuilder.Eq(t => t.Status, status);
+        }
+
+        return await _dbContext.Transfers
+            .Find(filter)
+            .SortByDescending(t => t.InitiatedAt)
+            .Limit(limit)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<Transfer> AddAsync(Transfer transfer, CancellationToken cancellationToken = default)
     {
         await _dbContext.Transfers.ReplaceOneAsync(

@@ -34,10 +34,12 @@ export const updateDeduction = (id, data) => api.put(`/deductions/${id}`, data);
 export const deleteDeduction = (id) => api.delete(`/deductions/${id}`);
 
 // Transfers
+export const getRecentTransfers = (limit = 50, status = null) => api.get('/transfers/recent', { params: { limit, ...(status && { status }) } });
 export const getTransfers = (employeeId) => api.get(`/transfers/employee/${employeeId}`);
 export const initiateTransfer = (data) => api.post('/transfers', data);
 export const getTransferLimits = (employeeId, payPeriodNumber) => api.get(`/transfers/employee/${employeeId}/limits`, { params: { payPeriodNumber } });
 export const acceptTransferBalanceChange = (transferId, accepted) => api.post(`/transfers/${transferId}/accept`, { accepted });
+export const getTransferWorkflow = (transferId) => api.get(`/transfers/${transferId}/workflow`);
 
 // Employee Transfer Limits (custom per-employee overrides)
 export const getEmployeeTransferLimits = (employeeId) => api.get(`/transfers/employee/${employeeId}/custom-limits`);

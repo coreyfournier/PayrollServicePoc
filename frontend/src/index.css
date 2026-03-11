@@ -623,6 +623,10 @@ body {
   to { transform: rotate(360deg); }
 }
 
+.spin {
+  animation: spin 1s linear infinite;
+}
+
 .toast-container {
   position: fixed;
   top: 24px;

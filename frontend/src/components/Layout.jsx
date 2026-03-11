@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Users, LayoutDashboard, DollarSign, Clock, FileText } from 'lucide-react';
+import { Users, ArrowRightLeft, DollarSign } from 'lucide-react';
 
 function Layout({ children }) {
   return (
@@ -12,9 +12,13 @@ function Layout({ children }) {
           </div>
         </div>
         <nav className="sidebar-nav">
-          <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+          <NavLink to="/" end className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
             <Users />
             <span>Employees</span>
+          </NavLink>
+          <NavLink to="/transfers" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+            <ArrowRightLeft />
+            <span>Transfers</span>
           </NavLink>
         </nav>
       </aside>
