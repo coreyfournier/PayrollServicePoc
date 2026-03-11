@@ -361,3 +361,23 @@ CREATE TABLE OutboxMessages (
 ```
 
 Debezium's outbox router reads `Topic` to decide where to publish, uses `AggregateId` as the Kafka message key (ensuring all transfers for the same employee are ordered), and sends `Payload` as the message value.
+
+### Outbox Cleanup
+
+OutboxMessages rows accumulate indefinitely unless cleaned up. A MySQL scheduled event purges rows older than 2 hours:
+
+```sql
+CREATE EVENT cleanup_outbox_messages
+  ON SCHEDULE EVERY 2 HOUR
+  DO DELETE FROM OutboxMessages WHERE CreatedAt < NOW() - INTERVAL 2 HOUR;
+```
+
+**Why this is safe:** Debezium reads from the MySQL **binlog**, not from the OutboxMessages table. Once a row is INSERTed, that INSERT is permanently recorded in the binlog. Debezium tracks its position (offset) in the binlog stream, so it will see every INSERT regardless of whether the row still exists in the table. This means rows can be deleted from the table immediately after insertion without any impact on message delivery.
+
+The 2-hour retention is a convenience window for debugging and observability — it allows operators to inspect recent outbox rows if needed. In production, this interval could safely be reduced to minutes.
+
+The only scenario where cleanup could cause issues is if the **MySQL binlog itself is purged** (`expire_logs_days` / `binlog_expire_logs_seconds`) before Debezium has consumed the events. But that's a binlog retention configuration concern, not an outbox table concern — the cleanup event doesn't affect it.
+
+**Prerequisites:**
+- MySQL must be started with `--event-scheduler=ON` (configured in `docker-compose.yaml`)
+- The event is created by `scripts/seed.sh` after the Debezium connector is registered

@@ -311,6 +311,20 @@ curl -sf -X POST "$CONNECT/connectors" \
   }
 }' > /dev/null && log "  Debezium outbox connector registered." || log "  Debezium outbox connector registration failed."
 
+# ── 1e-2. MySQL outbox cleanup event ─────────────────────────────────────
+# Debezium reads from the MySQL binlog, not the OutboxMessages table itself.
+# Once a row is INSERTed, the binlog records it permanently. Debezium tracks
+# its position in the binlog, so rows can be safely deleted from the table
+# without affecting message delivery. This scheduled event purges rows older
+# than 2 hours to prevent unbounded table growth.
+log "Creating MySQL outbox cleanup event..."
+mysql -h mysql -u root -proot_password listener_db -e "
+  DROP EVENT IF EXISTS cleanup_outbox_messages;
+  CREATE EVENT cleanup_outbox_messages
+    ON SCHEDULE EVERY 2 HOUR
+    DO DELETE FROM OutboxMessages WHERE CreatedAt < NOW() - INTERVAL 2 HOUR;
+" 2>/dev/null && log "  Outbox cleanup event created (every 2 hours)." || log "  Outbox cleanup event creation failed (table may not exist yet)."
+
 # ── 1f. Initialize ksqlDB streams and tables ─────────────────────────────
 
 KSQL="http://ksqldb-server:8088"

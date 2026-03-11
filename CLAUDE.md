@@ -310,9 +310,11 @@ ListenerApi uses the **Debezium Outbox Pattern** — an industry-standard approa
 - **No custom publisher** — Debezium runs as a Kafka Connect connector (already in the stack)
 - **Low latency** — binlog tailing is near-real-time (~100ms)
 
+**Outbox cleanup:** A MySQL scheduled event (`cleanup_outbox_messages`) purges rows older than 2 hours. This is safe because Debezium reads from the MySQL **binlog**, not the table — once a row is INSERTed, the binlog records it permanently regardless of whether the row is later deleted. The 2-hour window is for debugging visibility only. Requires `--event-scheduler=ON` in MySQL (configured in docker-compose). Created by the seed script.
+
 Key files: `src/ListenerApi.Data/Entities/OutboxMessage.cs`, `src/ListenerApi/Controllers/TransferController.cs`, `docker/Dockerfile.kafka-connect` (Debezium plugin), `scripts/seed.sh` (connector registration).
 
-See `docs/transfer-outbox-options.md` for the full comparison of approaches evaluated.
+See `docs/transfer-outbox-options.md` for the full comparison of approaches evaluated and outbox cleanup details.
 
 **End-to-End Data Flow:**
 ```

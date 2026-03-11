@@ -133,6 +133,7 @@ services:
       --binlog-row-image=FULL
       --gtid-mode=ON
       --enforce-gtid-consistency=ON
+      --event-scheduler=ON
     ports:
       - "3306:3306"
     environment:
