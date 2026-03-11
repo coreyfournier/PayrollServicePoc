@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Dapr.Client;
+using ListenerApi.Data.DbContext;
 using ListenerApi.Data.Entities;
 using ListenerApi.Data.Repositories;
 using Microsoft.AspNetCore.Mvc;
@@ -11,28 +13,31 @@ public class TransferController : ControllerBase
 {
     private readonly ITransferRecordRepository _transferRepository;
     private readonly IEmployeeRecordRepository _employeeRepository;
+    private readonly ListenerDbContext _dbContext;
     private readonly DaprClient _daprClient;
     private readonly ILogger<TransferController> _logger;
 
-    private const string StateStoreName = "statestore-listener-transfers";
-    private const string PubSubName = "kafka-pubsub-listener";
     private const string TransferRequestsTopic = "transfer-requests";
 
     public TransferController(
         ITransferRecordRepository transferRepository,
         IEmployeeRecordRepository employeeRepository,
+        ListenerDbContext dbContext,
         DaprClient daprClient,
         ILogger<TransferController> logger)
     {
         _transferRepository = transferRepository;
         _employeeRepository = employeeRepository;
+        _dbContext = dbContext;
         _daprClient = daprClient;
         _logger = logger;
     }
 
     /// <summary>
-    /// Initiates a transfer request. Persists to MySQL and publishes to Kafka
-    /// via Dapr state store outbox (atomic). Payroll-api processes when available.
+    /// Initiates a transfer request using the Debezium Outbox Pattern.
+    /// A single MySQL transaction atomically writes the TransferRecord (client read model)
+    /// and an OutboxMessage (command envelope). Debezium CDC tails the MySQL binlog and
+    /// publishes the outbox row to Kafka — no custom publisher needed.
     /// </summary>
     [HttpPost]
     public async Task<ActionResult<TransferRecord>> InitiateTransfer([FromBody] InitiateTransferRequest request)
@@ -52,7 +57,10 @@ public class TransferController : ControllerBase
         var transferId = Guid.NewGuid();
         var now = DateTime.UtcNow;
 
-        // Persist to MySQL as the client's read model (status: Queued)
+        // Single MySQL transaction: TransferRecord + OutboxMessage (atomic)
+        // Debezium CDC picks up the OutboxMessage via binlog and publishes to Kafka.
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync();
+
         var record = new TransferRecord
         {
             Id = transferId,
@@ -63,33 +71,31 @@ public class TransferController : ControllerBase
             InitiatedAt = now,
             UpdatedAt = now
         };
-        await _transferRepository.AddAsync(record);
+        _dbContext.TransferRecords.Add(record);
 
-        // Publish transfer request to Kafka via Dapr pub/sub
-        // This uses Dapr pub/sub directly (not outbox) since the MySQL write is our read model
-        // and the Kafka message is the command to payroll-api
-        var transferRequest = new
+        var outboxMessage = new OutboxMessage
         {
-            TransferId = transferId,
-            request.EmployeeId,
-            request.Amount,
-            request.PayPeriodNumber,
-            request.BankAccountId
+            Id = Guid.NewGuid(),
+            AggregateId = request.EmployeeId.ToString(),
+            Topic = TransferRequestsTopic,
+            Payload = JsonSerializer.Serialize(new
+            {
+                TransferId = transferId,
+                request.EmployeeId,
+                request.Amount,
+                request.PayPeriodNumber,
+                request.BankAccountId
+            }),
+            CreatedAt = now
         };
+        _dbContext.OutboxMessages.Add(outboxMessage);
 
-        try
-        {
-            await _daprClient.PublishEventAsync(PubSubName, TransferRequestsTopic, transferRequest);
-            _logger.LogInformation("Published transfer request {TransferId} for employee {EmployeeId}",
-                transferId, request.EmployeeId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to publish transfer request {TransferId}. Record saved as Queued — will need retry.",
-                transferId);
-            // Record is saved as Queued — visible to client on refresh
-            // A background retry mechanism could pick this up (out of scope for POC)
-        }
+        await _dbContext.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        _logger.LogInformation(
+            "Transfer {TransferId} queued atomically with outbox message {OutboxId} for employee {EmployeeId}",
+            transferId, outboxMessage.Id, request.EmployeeId);
 
         return Accepted(record);
     }

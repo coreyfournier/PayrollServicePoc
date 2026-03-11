@@ -25,7 +25,7 @@ public class TransferHappyPathTests
         var employee = _fixture.GetEmployee("John");
         var bankAccount = _fixture.GetBankAccount(employee.Id);
         const decimal amount = 50m;
-        const long payPeriod = 56;
+        var payPeriod = TestFixture.CurrentPayPeriod;
 
         // Act — initiate transfer
         var initResult = await _fixture.Api.InitiateTransferAsync(
@@ -62,8 +62,9 @@ public class TransferHappyPathTests
         // Verify Dapr state store consistency
         var daprState = await _fixture.Db.GetDaprTransferStateAsync(transferId);
         daprState.Should().NotBeNull("transfer must exist in Dapr state store");
-        daprState!.RootElement.GetProperty("Status").GetInt32()
-            .Should().Be(transfer.Status);
+        var expectedStatus = transfer.Status == 3 ? "Completed" : "Failed";
+        daprState!.RootElement.GetProperty("status").GetString()
+            .Should().Be(expectedStatus);
 
         // Verify Kafka event propagated to ListenerApi MySQL
         var mysqlRecords = await PollingHelper.WaitForAsync(
@@ -75,7 +76,7 @@ public class TransferHappyPathTests
 
         var mysqlRecord = mysqlRecords.First(r => r.Id == transferId);
         mysqlRecord.Amount.Should().Be(amount);
-        var expectedStatus = transfer.Status == 3 ? "Completed" : "Failed";
-        mysqlRecord.Status.Should().Be(expectedStatus);
+        var expectedMysqlStatus = transfer.Status == 3 ? "Completed" : "Failed";
+        mysqlRecord.Status.Should().Be(expectedMysqlStatus);
     }
 }

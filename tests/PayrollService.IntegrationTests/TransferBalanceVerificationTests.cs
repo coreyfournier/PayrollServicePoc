@@ -29,7 +29,7 @@ public class TransferBalanceVerificationTests
         var employee = _fixture.GetEmployee("Michael");
         var bankAccount = _fixture.GetBankAccount(employee.Id);
         const decimal amount = 5000m;
-        const long payPeriod = 56;
+        var payPeriod = TestFixture.CurrentPayPeriod;
 
         // Act — initiate
         var initResult = await _fixture.Api.InitiateTransferAsync(
@@ -52,8 +52,8 @@ public class TransferBalanceVerificationTests
         // Verify Dapr state
         var daprState = await _fixture.Db.GetDaprTransferStateAsync(transferId);
         daprState.Should().NotBeNull();
-        daprState!.RootElement.GetProperty("Status").GetInt32().Should().Be(StatusAwaitingConfirmation);
-        daprState.RootElement.GetProperty("CurrentBalance").GetDecimal()
+        daprState!.RootElement.GetProperty("status").GetString().Should().Be("AwaitingConfirmation");
+        daprState.RootElement.GetProperty("currentBalance").GetDecimal()
             .Should().Be(transfer.CurrentBalance!.Value);
 
         // Verify MySQL got the event
@@ -94,7 +94,7 @@ public class TransferBalanceVerificationTests
         var employee = _fixture.GetEmployee("David");
         var bankAccount = _fixture.GetBankAccount(employee.Id);
         const decimal amount = 5000m;
-        const long payPeriod = 56;
+        var payPeriod = TestFixture.CurrentPayPeriod;
 
         // Initiate and wait for AwaitingConfirmation
         var initResult = await _fixture.Api.InitiateTransferAsync(

@@ -11,6 +11,14 @@ export default defineConfig({
         target: 'http://localhost:5001',
         changeOrigin: true,
         ws: true
+      },
+      '/api/Transfer': {
+        target: 'http://localhost:5001',
+        changeOrigin: true
+      },
+      '/api/bankaccounts': {
+        target: 'http://localhost:5002',
+        changeOrigin: true
       }
     }
   }

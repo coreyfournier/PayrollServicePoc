@@ -628,3 +628,244 @@ h1 {
   0% { background-color: rgba(245, 158, 11, 0.25); }
   100% { background-color: transparent; }
 }
+
+/* Pay Detail Actions */
+.pay-detail-actions {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-dark);
+}
+
+/* Transfer Panel Modal */
+.transfer-panel {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  max-width: 700px;
+  width: 95%;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-md);
+}
+
+.transfer-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.transfer-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.transfer-panel-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.btn-back {
+  padding: 4px 10px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.transfer-balance-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--background);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 16px;
+}
+
+.transfer-balance-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.transfer-balance-amount {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--success);
+  font-family: 'Courier New', monospace;
+}
+
+.transfer-error {
+  background: #fee2e2;
+  color: #991b1b;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid #fca5a5;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.transfer-success {
+  background: #dcfce7;
+  color: #166534;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid #86efac;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+/* Transfer Form */
+.transfer-form {
+  background: var(--background);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.transfer-form h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+.transfer-form-fields {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.transfer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 100px;
+}
+
+.transfer-field label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.transfer-field input,
+.transfer-field select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--surface);
+}
+
+.transfer-amount-locked {
+  background: var(--background) !important;
+  color: var(--text-primary);
+  font-weight: 600;
+  cursor: default;
+}
+
+.transfer-field input:focus,
+.transfer-field select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+/* Transfer History */
+.transfer-history h4 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+
+.transfer-empty {
+  text-align: center;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.transfer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.transfer-table th {
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--background);
+  color: var(--text-secondary);
+  font-weight: 600;
+  border-bottom: 2px solid var(--border);
+  white-space: nowrap;
+}
+
+.transfer-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.transfer-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.transfer-status-success { background: #dcfce7; color: #166534; }
+.transfer-status-danger { background: #fee2e2; color: #991b1b; }
+.transfer-status-warning { background: #fef9c3; color: #854d0e; }
+.transfer-status-info { background: #dbeafe; color: #1e40af; }
+
+.transfer-confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.transfer-balance {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.btn-sm {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.btn-accept {
+  background: var(--success);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-reject {
+  background: var(--danger);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}

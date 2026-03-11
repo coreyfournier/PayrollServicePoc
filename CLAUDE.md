@@ -301,6 +301,19 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 
 The transfer feature is a **separate bounded context** (`TransferService.*`) with its own database (`transfer_db`), Dapr state store, and Dapr sidecar. It demonstrates several advanced architecture patterns.
 
+**Debezium Outbox Pattern (Transfer Command Dispatch):**
+
+ListenerApi uses the **Debezium Outbox Pattern** — an industry-standard approach used by Netflix, Airbnb, WePay, and Zalando. A single MySQL transaction atomically writes the `TransferRecord` (client read model) and an `OutboxMessage` (command envelope). Debezium's MySQL CDC connector tails the binlog and routes each outbox row to the Kafka topic specified in the row's `Topic` column, using `AggregateId` as the Kafka message key (preserving per-employee ordering). This guarantees:
+- **Atomicity** — both succeed or both fail in one MySQL transaction
+- **Guaranteed delivery** — Debezium handles publish, retry, and offset tracking
+- **Repeatable reads** — the client always sees the transfer on refresh (MySQL is source of truth)
+- **No custom publisher** — Debezium runs as a Kafka Connect connector (already in the stack)
+- **Low latency** — binlog tailing is near-real-time (~100ms)
+
+Key files: `src/ListenerApi.Data/Entities/OutboxMessage.cs`, `src/ListenerApi/Controllers/TransferController.cs`, `docker/Dockerfile.kafka-connect` (Debezium plugin), `scripts/seed.sh` (connector registration).
+
+See `docs/transfer-outbox-options.md` for the full comparison of approaches evaluated.
+
 **End-to-End Data Flow:**
 ```
 Client (REST/GraphQL)
@@ -314,7 +327,7 @@ Client (REST/GraphQL)
   │           │    └─ MongoDB transfer_db (best-effort read model)
   │           └─ Schedule TransferWorkflow
   │
-  └─► Async: ListenerApi → Kafka (transfer-requests) → transfer-api subscription
+  └─► Async: ListenerApi (Debezium Outbox) → Kafka (transfer-requests) → transfer-api subscription
         └─► Same actor path as above
 
 TransferWorkflow (Durable Task Framework):
@@ -411,6 +424,8 @@ TransferWorkflow (Durable Task Framework):
 - `dapr/components-transfer/statestore-transfers.yaml` — transfer-specific Dapr state store with outbox
 - `dapr/components-transfer/kafka-pubsub.yaml` — transfer service Kafka pub/sub
 - `docker/Dockerfile.transferapi` — TransferService.Api Dockerfile
+- `src/ListenerApi.Data/Entities/OutboxMessage.cs` — Debezium outbox entity
+- `docs/transfer-outbox-options.md` — Comparison of outbox approaches (MySQL, Dapr, Debezium)
 
 ## Known Issues
 

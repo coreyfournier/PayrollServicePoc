@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Dapr.Actors;
 using Dapr.Actors.Client;
 using Dapr.Workflow;
@@ -72,9 +73,43 @@ public class TransfersController : ControllerBase
     }
 
     [HttpPost("process-request")]
-    [Dapr.Topic("kafka-pubsub", "transfer-requests")]
-    public async Task<ActionResult> ProcessTransferRequest([FromBody] TransferRequestEvent request)
+    public async Task<ActionResult> ProcessTransferRequest()
     {
+        // Read body manually to handle both CloudEvent-wrapped (Dapr outbox) and
+        // raw JSON (Debezium CDC outbox) messages without content-type issues.
+        using var reader = new StreamReader(Request.Body);
+        var body = await reader.ReadToEndAsync();
+
+        // If Dapr wraps the message in a CloudEvent, extract the "data" field
+        TransferRequestEvent? request = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("data", out var dataElement))
+            {
+                // CloudEvent envelope — extract data (may be string or object)
+                if (dataElement.ValueKind == JsonValueKind.String)
+                    request = JsonSerializer.Deserialize<TransferRequestEvent>(dataElement.GetString()!,
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                else
+                    request = JsonSerializer.Deserialize<TransferRequestEvent>(dataElement.GetRawText(),
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+            else
+            {
+                // Raw JSON payload (no CloudEvent wrapper)
+                request = JsonSerializer.Deserialize<TransferRequestEvent>(body,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+        }
+        catch (JsonException)
+        {
+            return BadRequest("Invalid JSON payload");
+        }
+
+        if (request == null || request.EmployeeId == Guid.Empty)
+            return BadRequest("Missing required transfer request fields");
+
         var actorId = new ActorId(request.EmployeeId.ToString());
         var actor = _actorProxyFactory.CreateActorProxy<ITransferActor>(actorId, "TransferActor");
 

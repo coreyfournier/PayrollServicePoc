@@ -51,6 +51,20 @@ public class TestFixture : IAsyncLifetime
         await Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Current bi-weekly pay period number (epoch: 2024-01-01, period: 14 days).
+    /// Matches the ksqlDB pay period calculation used throughout the pipeline.
+    /// </summary>
+    public static long CurrentPayPeriod
+    {
+        get
+        {
+            var epoch = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            return (now - epoch) / (14L * 24 * 60 * 60 * 1000);
+        }
+    }
+
     // Helper: find employee by name
     public EmployeeResponse GetEmployee(string firstName) =>
         Employees.First(e => e.FirstName.Equals(firstName, StringComparison.OrdinalIgnoreCase));

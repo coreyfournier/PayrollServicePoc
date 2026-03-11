@@ -23,7 +23,7 @@ public class TransferLimitsTests
         // Arrange — MaxPerDay is 1
         var employee = _fixture.GetEmployee("Emily");
         var bankAccount = _fixture.GetBankAccount(employee.Id);
-        const long payPeriod = 56;
+        var payPeriod = TestFixture.CurrentPayPeriod;
 
         // First transfer should succeed
         var first = await _fixture.Api.InitiateTransferAsync(
@@ -45,7 +45,7 @@ public class TransferLimitsTests
         // Arrange
         var employee = _fixture.GetEmployee("Sarah");
         var bankAccount = _fixture.GetBankAccount(employee.Id);
-        const long payPeriod = 56;
+        var payPeriod = TestFixture.CurrentPayPeriod;
 
         // Check limits before any transfer
         var limitsBefore = await _fixture.Api.GetTransferLimitsAsync(employee.Id, payPeriod);
@@ -69,7 +69,7 @@ public class TransferLimitsTests
     {
         var employee = _fixture.GetEmployee("John");
         var fakeBankAccountId = Guid.NewGuid();
-        const long payPeriod = 56;
+        var payPeriod = TestFixture.CurrentPayPeriod;
 
         var result = await _fixture.Api.InitiateTransferAsync(
             employee.Id, 10m, payPeriod, fakeBankAccountId);
@@ -85,7 +85,7 @@ public class TransferLimitsTests
         var john = _fixture.GetEmployee("John");
         var sarah = _fixture.GetEmployee("Sarah");
         var johnBankAccount = _fixture.GetBankAccount(john.Id);
-        const long payPeriod = 56;
+        var payPeriod = TestFixture.CurrentPayPeriod;
 
         var result = await _fixture.Api.InitiateTransferAsync(
             sarah.Id, 10m, payPeriod, johnBankAccount.Id);

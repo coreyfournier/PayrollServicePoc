@@ -7,21 +7,21 @@ namespace PayrollService.IntegrationTests.Infrastructure;
 
 public class DatabaseHelper : IDisposable
 {
-    private readonly IMongoDatabase _mongoDb;
+    private readonly IMongoDatabase _transferDb;
     private readonly string _mysqlConnectionString;
 
     public DatabaseHelper()
     {
         var client = new MongoClient(ServiceEndpoints.MongoConnectionString);
-        _mongoDb = client.GetDatabase(ServiceEndpoints.MongoDatabaseName);
+        _transferDb = client.GetDatabase(ServiceEndpoints.MongoTransferDatabaseName);
         _mysqlConnectionString = ServiceEndpoints.MySqlConnectionString;
     }
 
     // MongoDB: Dapr transfer state store
     public async Task<JsonDocument?> GetDaprTransferStateAsync(Guid transferId)
     {
-        var collection = _mongoDb.GetCollection<BsonDocument>("dapr_transfer_state");
-        var filter = Builders<BsonDocument>.Filter.Regex("_id", $".*{transferId}.*");
+        var collection = _transferDb.GetCollection<BsonDocument>("dapr_transfer_state");
+        var filter = Builders<BsonDocument>.Filter.Regex("_id", $".*transfer-{transferId}$");
         var doc = await collection.Find(filter).FirstOrDefaultAsync();
 
         if (doc == null) return null;
@@ -29,14 +29,18 @@ public class DatabaseHelper : IDisposable
         var value = doc.GetValue("value", BsonNull.Value);
         if (value.IsBsonNull) return null;
 
+        // Value can be a BsonDocument (object) or a string
+        if (value.IsBsonDocument)
+            return JsonDocument.Parse(value.AsBsonDocument.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson }));
+
         return JsonDocument.Parse(value.AsString);
     }
 
     // MongoDB: Clean transfers for a specific employee
     public async Task CleanTransfersAsync(Guid? employeeId = null)
     {
-        var transferState = _mongoDb.GetCollection<BsonDocument>("dapr_transfer_state");
-        var transfers = _mongoDb.GetCollection<BsonDocument>("transfers");
+        var transferState = _transferDb.GetCollection<BsonDocument>("dapr_transfer_state");
+        var transfers = _transferDb.GetCollection<BsonDocument>("transfers");
 
         if (employeeId == null)
         {

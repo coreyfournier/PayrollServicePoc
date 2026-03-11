@@ -86,15 +86,35 @@ else:
 client.close()
 PYEOF
 
-# 1b. Clear MySQL
+# 1b. Clear MySQL + grant replication privileges for Debezium CDC
 log "Clearing MySQL (listener_db)..."
 python3 << 'PYEOF'
 import mysql.connector
+
+# Grant replication privileges for Debezium CDC (idempotent)
+root_conn = mysql.connector.connect(
+    host='mysql', user='root', password='root_password'
+)
+root_cursor = root_conn.cursor()
+root_cursor.execute("GRANT REPLICATION SLAVE, REPLICATION CLIENT, RELOAD ON *.* TO 'listener_user'@'%'")
+root_cursor.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON listener_db.* TO 'listener_user'@'%'")
+root_cursor.execute("FLUSH PRIVILEGES")
+root_conn.commit()
+root_cursor.close()
+root_conn.close()
+print("  Granted replication privileges to listener_user for Debezium CDC")
+
 conn = mysql.connector.connect(
     host='mysql', database='listener_db',
     user='listener_user', password='listener_password'
 )
 cursor = conn.cursor()
+try:
+    cursor.execute('DELETE FROM OutboxMessages')
+    conn.commit()
+    print(f"  Deleted {cursor.rowcount} rows from OutboxMessages")
+except mysql.connector.errors.ProgrammingError:
+    print("  OutboxMessages table does not exist yet, skipping")
 try:
     cursor.execute('DELETE FROM EmployeeRecords')
     conn.commit()
@@ -254,6 +274,43 @@ curl -sf -X POST "$CONNECT/connectors" \
   }
 }' > /dev/null && log "  Connector registered." || log "  Connector registration failed."
 
+# Register Debezium MySQL Source Connector (Outbox Pattern)
+# Tails MySQL binlog, reads OutboxMessages table inserts, routes to Kafka topic
+# specified in each row's Topic column. Uses AggregateId as Kafka message key.
+log "Registering Debezium MySQL outbox connector..."
+curl -sf -X DELETE "$CONNECT/connectors/debezium-outbox" > /dev/null 2>&1 || true
+curl -sf -X POST "$CONNECT/connectors" \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "name": "debezium-outbox",
+  "config": {
+    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+    "tasks.max": "1",
+    "database.hostname": "mysql",
+    "database.port": "3306",
+    "database.user": "listener_user",
+    "database.password": "listener_password",
+    "database.server.id": "184054",
+    "topic.prefix": "listener",
+    "database.include.list": "listener_db",
+    "table.include.list": "listener_db.OutboxMessages",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+    "schema.history.internal.kafka.topic": "_debezium-schema-history",
+    "transforms": "outbox",
+    "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+    "transforms.outbox.table.field.event.id": "Id",
+    "transforms.outbox.table.field.event.key": "AggregateId",
+    "transforms.outbox.table.field.event.payload": "Payload",
+    "transforms.outbox.table.field.event.timestamp": "CreatedAt",
+    "transforms.outbox.route.by.field": "Topic",
+    "transforms.outbox.route.topic.replacement": "${routedByValue}",
+    "transforms.outbox.table.expand.json.payload": true,
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": false
+  }
+}' > /dev/null && log "  Debezium outbox connector registered." || log "  Debezium outbox connector registration failed."
+
 # ── 1f. Initialize ksqlDB streams and tables ─────────────────────────────
 
 KSQL="http://ksqldb-server:8088"
@@ -374,50 +431,55 @@ log "  Transfer API is ready."
 
 log "Creating bank accounts..."
 
-api_post "$TRANSFER_API/bankaccounts" -d "{
+BA1=$(api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP1_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"1234\",
   \"routingNumber\": \"021000021\",
   \"accountType\": 1
-}" > /dev/null
-log "  John Smith — Chase Bank ****1234"
+}")
+BA1_ID=$(echo "$BA1" | jq -r '.id')
+log "  John Smith — Chase Bank ****1234 — $BA1_ID"
 
-api_post "$TRANSFER_API/bankaccounts" -d "{
+BA2=$(api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP2_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"5678\",
   \"routingNumber\": \"021000021\",
   \"accountType\": 1
-}" > /dev/null
-log "  Sarah Johnson — Chase Bank ****5678"
+}")
+BA2_ID=$(echo "$BA2" | jq -r '.id')
+log "  Sarah Johnson — Chase Bank ****5678 — $BA2_ID"
 
-api_post "$TRANSFER_API/bankaccounts" -d "{
+BA3=$(api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP3_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"9012\",
   \"routingNumber\": \"021000021\",
   \"accountType\": 1
-}" > /dev/null
-log "  Michael Williams — Chase Bank ****9012"
+}")
+BA3_ID=$(echo "$BA3" | jq -r '.id')
+log "  Michael Williams — Chase Bank ****9012 — $BA3_ID"
 
-api_post "$TRANSFER_API/bankaccounts" -d "{
+BA4=$(api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP4_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"3456\",
   \"routingNumber\": \"021000021\",
   \"accountType\": 1
-}" > /dev/null
-log "  Emily Brown — Chase Bank ****3456"
+}")
+BA4_ID=$(echo "$BA4" | jq -r '.id')
+log "  Emily Brown — Chase Bank ****3456 — $BA4_ID"
 
-api_post "$TRANSFER_API/bankaccounts" -d "{
+BA5=$(api_post "$TRANSFER_API/bankaccounts" -d "{
   \"employeeId\": \"$EMP5_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"7890\",
   \"routingNumber\": \"021000021\",
   \"accountType\": 1
-}" > /dev/null
-log "  David Davis — Chase Bank ****7890"
+}")
+BA5_ID=$(echo "$BA5" | jq -r '.id')
+log "  David Davis — Chase Bank ****7890 — $BA5_ID"
 
 # ── 3. Create time entries for hourly employees ────────────────────────────
 
@@ -600,7 +662,35 @@ api_post "$API/deductions" -d "{
 }" > /dev/null
 log "  Michael Williams — Health (\$250), Vision (\$25), 401k (10%)"
 
-# ── 6. Verify Elasticsearch ──────────────────────────────────────────────
+# ── 6. Initiate transfers via Listener API ───────────────────────────────
+
+log "Initiating transfers via Listener API..."
+
+# Wait for employees to be materialized in listener-api MySQL
+# (employee-events must propagate through Dapr → Kafka → listener-api subscription)
+log "  Waiting for employees to appear in Listener API..."
+until curl -sf "$LISTENER/api/Transfer/employee/$EMP2_ID/limits?payPeriodNumber=56" > /dev/null 2>&1; do
+  sleep 3
+done
+log "  Employees materialized in Listener API."
+
+api_post "$LISTENER/api/Transfer" -d "{
+  \"employeeId\": \"$EMP2_ID\",
+  \"amount\": 100.00,
+  \"payPeriodNumber\": 56,
+  \"bankAccountId\": \"$BA2_ID\"
+}" > /dev/null
+log "  Sarah Johnson — \$100 transfer (period 56)"
+
+api_post "$LISTENER/api/Transfer" -d "{
+  \"employeeId\": \"$EMP4_ID\",
+  \"amount\": 150.00,
+  \"payPeriodNumber\": 56,
+  \"bankAccountId\": \"$BA4_ID\"
+}" > /dev/null
+log "  Emily Brown — \$150 transfer (period 56)"
+
+# ── 7. Verify Elasticsearch ──────────────────────────────────────────────
 
 log "Waiting for Elasticsearch documents to appear..."
 sleep 15
@@ -621,6 +711,7 @@ log "  5 bank accounts created"
 log "  40 time entries created (20 each for Sarah Johnson & Emily Brown)"
 log "  5 tax records created"
 log "  7 deductions created"
+log "  2 transfers initiated (via Listener API)"
 log "  $ES_COUNT Elasticsearch documents"
 log ""
 log "Verify with:"

@@ -2,8 +2,9 @@ import { useQuery, useMutation, useSubscription } from 'urql';
 import { GET_ALL_EMPLOYEES, DELETE_ALL_EMPLOYEES } from '../graphql/queries';
 import { EMPLOYEE_CHANGE_SUBSCRIPTION } from '../graphql/subscriptions';
 import { useState, useEffect, useRef, useCallback } from 'react';
+import TransferPanel from './TransferPanel';
 
-function PayDetailModal({ employee, onClose }) {
+function PayDetailModal({ employee, onClose, onTransfer }) {
   const pa = employee.payAttributes;
   if (!pa) return null;
 
@@ -63,6 +64,11 @@ function PayDetailModal({ employee, onClose }) {
           <div className="pay-detail-label pay-detail-net-label">Net Pay</div>
           <div className="pay-detail-value pay-detail-net">{formatCurrency(pa.netPay)}</div>
         </div>
+        <div className="pay-detail-actions">
+          <button className="btn btn-primary" onClick={onTransfer}>
+            Transfer
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -73,6 +79,7 @@ export default function EmployeeList() {
   const [deleteResult, deleteAllEmployees] = useMutation(DELETE_ALL_EMPLOYEES);
   const [showConfirm, setShowConfirm] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
+  const [view, setView] = useState('pay'); // 'pay' or 'transfer'
 
   const [employees, setEmployees] = useState([]);
   const [highlightedIds, setHighlightedIds] = useState(new Map());
@@ -228,10 +235,19 @@ export default function EmployeeList() {
         </div>
       )}
 
-      {selectedEmployee && (
+      {selectedEmployee && view === 'pay' && (
         <PayDetailModal
           employee={selectedEmployee}
-          onClose={() => setSelectedEmployeeId(null)}
+          onClose={() => { setSelectedEmployeeId(null); setView('pay'); }}
+          onTransfer={() => setView('transfer')}
+        />
+      )}
+
+      {selectedEmployee && view === 'transfer' && (
+        <TransferPanel
+          employee={selectedEmployee}
+          onClose={() => { setSelectedEmployeeId(null); setView('pay'); }}
+          onBack={() => setView('pay')}
         />
       )}
 

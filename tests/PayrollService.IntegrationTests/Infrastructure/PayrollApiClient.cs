@@ -8,6 +8,7 @@ namespace PayrollService.IntegrationTests.Infrastructure;
 public class PayrollApiClient : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly HttpClient _transferHttp;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -17,6 +18,7 @@ public class PayrollApiClient : IDisposable
     public PayrollApiClient()
     {
         _http = new HttpClient { BaseAddress = new Uri(ServiceEndpoints.PayrollApi) };
+        _transferHttp = new HttpClient { BaseAddress = new Uri(ServiceEndpoints.TransferApi) };
     }
 
     // Employees
@@ -27,18 +29,18 @@ public class PayrollApiClient : IDisposable
         return (await resp.Content.ReadFromJsonAsync<List<EmployeeResponse>>(JsonOptions))!;
     }
 
-    // Bank Accounts
+    // Bank Accounts (on transfer-api)
     public async Task<List<BankAccountResponse>> GetBankAccountsAsync(Guid employeeId)
     {
-        var resp = await _http.GetAsync($"/api/bankaccounts/employee/{employeeId}");
+        var resp = await _transferHttp.GetAsync($"/api/bankaccounts/employee/{employeeId}");
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<List<BankAccountResponse>>(JsonOptions))!;
     }
 
-    // Transfers
+    // Transfers (on transfer-api)
     public async Task<TransferInitiateResponse> InitiateTransferAsync(Guid employeeId, decimal amount, long payPeriodNumber, Guid bankAccountId)
     {
-        var resp = await _http.PostAsJsonAsync("/api/transfers", new
+        var resp = await _transferHttp.PostAsJsonAsync("/api/transfers", new
         {
             employeeId,
             amount,
@@ -52,7 +54,7 @@ public class PayrollApiClient : IDisposable
 
     public async Task<List<TransferResponse>> GetTransfersByEmployeeAsync(Guid employeeId)
     {
-        var resp = await _http.GetAsync($"/api/transfers/employee/{employeeId}");
+        var resp = await _transferHttp.GetAsync($"/api/transfers/employee/{employeeId}");
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<List<TransferResponse>>(JsonOptions))!;
     }
@@ -65,18 +67,22 @@ public class PayrollApiClient : IDisposable
 
     public async Task AcceptBalanceChangeAsync(Guid transferId, bool accepted)
     {
-        var resp = await _http.PostAsJsonAsync($"/api/transfers/{transferId}/accept", new { accepted });
+        var resp = await _transferHttp.PostAsJsonAsync($"/api/transfers/{transferId}/accept", new { accepted });
         resp.EnsureSuccessStatusCode();
     }
 
     public async Task<TransferLimitsResponse> GetTransferLimitsAsync(Guid employeeId, long payPeriodNumber)
     {
-        var resp = await _http.GetAsync($"/api/transfers/employee/{employeeId}/limits?payPeriodNumber={payPeriodNumber}");
+        var resp = await _transferHttp.GetAsync($"/api/transfers/employee/{employeeId}/limits?payPeriodNumber={payPeriodNumber}");
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<TransferLimitsResponse>(JsonOptions))!;
     }
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose()
+    {
+        _http.Dispose();
+        _transferHttp.Dispose();
+    }
 }
 
 // Response DTOs

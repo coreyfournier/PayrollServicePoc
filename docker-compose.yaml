@@ -122,10 +122,17 @@ services:
       retries: 10
       start_period: 15s
 
-  # MySQL database
+  # MySQL database (binlog enabled for Debezium CDC)
   mysql:
     image: mysql:8.0
     container_name: mysql
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --binlog-row-image=FULL
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
     ports:
       - "3306:3306"
     environment:
@@ -325,6 +332,8 @@ services:
       kafka:
         condition: service_healthy
       elasticsearch:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
     networks:
       - payroll-network
