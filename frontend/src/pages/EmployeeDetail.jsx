@@ -2,14 +2,15 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, Mail, Calendar, DollarSign, Clock, FileText,
-  Building, Plus, Edit, Trash2, X, Play, Square, Send
+  Building, Plus, Edit, Trash2, X, Play, Square, Send, Settings
 } from 'lucide-react';
 import {
   getEmployee, getTimeEntries, getTaxInfo, getDeductions,
   clockIn, clockOut, createTaxInfo, updateTaxInfo,
   createDeduction, updateDeduction, deleteDeduction, updateTimeEntry,
   updateEmployee, getTransfers, getBankAccounts, createBankAccount,
-  initiateTransfer, getTransferLimits, acceptTransferBalanceChange
+  initiateTransfer, getTransferLimits, acceptTransferBalanceChange,
+  getEmployeeTransferLimits, setEmployeeTransferLimits, deleteEmployeeTransferLimits
 } from '../api';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -57,6 +58,13 @@ function EmployeeDetail() {
   const [transferForm, setTransferForm] = useState({ amount: '', bankAccountId: '', payPeriodNumber: '' });
   const [bankAccountForm, setBankAccountForm] = useState({ bankName: '', accountNumberMasked: '', routingNumber: '', accountType: 1 });
   const [transferLimits, setTransferLimits] = useState(null);
+  const [showLimitsModal, setShowLimitsModal] = useState(false);
+  const [customLimits, setCustomLimits] = useState(null);
+  const [limitsForm, setLimitsForm] = useState({
+    maxTransfersPerPayPeriod: 5,
+    maxAmountPerPayPeriod: 10000,
+    maxTransfersPerDay: 1,
+  });
 
   const [taxForm, setTaxForm] = useState({
     federalFilingStatus: 'Single',
@@ -96,6 +104,14 @@ function EmployeeDetail() {
       setDeductions(dedRes.data);
       setTransfers(transferRes.data);
       setBankAccounts(bankRes.data);
+
+      // Load custom transfer limits
+      try {
+        const limitsRes = await getEmployeeTransferLimits(id);
+        setCustomLimits(limitsRes.data);
+      } catch {
+        setCustomLimits(null);
+      }
 
       // Check if currently clocked in
       const activeEntry = timeRes.data.find(e => !e.clockOut);
@@ -326,6 +342,46 @@ function EmployeeDetail() {
       loadAllData();
     } catch (error) {
       console.error('Error creating bank account:', error);
+    }
+  };
+
+  const handleOpenLimitsModal = () => {
+    if (customLimits) {
+      setLimitsForm({
+        maxTransfersPerPayPeriod: customLimits.maxTransfersPerPayPeriod,
+        maxAmountPerPayPeriod: customLimits.maxAmountPerPayPeriod,
+        maxTransfersPerDay: customLimits.maxTransfersPerDay,
+      });
+    } else {
+      setLimitsForm({ maxTransfersPerPayPeriod: 5, maxAmountPerPayPeriod: 10000, maxTransfersPerDay: 1 });
+    }
+    setShowLimitsModal(true);
+  };
+
+  const handleSaveLimits = async (e) => {
+    e.preventDefault();
+    try {
+      await setEmployeeTransferLimits(id, {
+        maxTransfersPerPayPeriod: parseInt(limitsForm.maxTransfersPerPayPeriod),
+        maxAmountPerPayPeriod: parseFloat(limitsForm.maxAmountPerPayPeriod),
+        maxTransfersPerDay: parseInt(limitsForm.maxTransfersPerDay),
+      });
+      setShowLimitsModal(false);
+      loadAllData();
+    } catch (error) {
+      console.error('Error saving transfer limits:', error);
+      alert('Error saving transfer limits');
+    }
+  };
+
+  const handleResetLimits = async () => {
+    try {
+      await deleteEmployeeTransferLimits(id);
+      setCustomLimits(null);
+      setShowLimitsModal(false);
+      loadAllData();
+    } catch (error) {
+      console.error('Error resetting transfer limits:', error);
     }
   };
 
@@ -686,6 +742,45 @@ function EmployeeDetail() {
                   </div>
                 </div>
               )}
+
+              <div style={{ marginBottom: '24px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <h4 style={{ fontSize: '14px', color: '#64748b', margin: 0 }}>Transfer Limits</h4>
+                  <button className="btn btn-secondary btn-sm" onClick={handleOpenLimitsModal}>
+                    <Settings /> {customLimits ? 'Edit Limits' : 'Customize'}
+                  </button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                  <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px' }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Per Day</div>
+                    <div style={{ fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>
+                      {customLimits ? customLimits.maxTransfersPerDay : 1}
+                    </div>
+                  </div>
+                  <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px' }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Per Period</div>
+                    <div style={{ fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>
+                      {customLimits ? customLimits.maxTransfersPerPayPeriod : 5}
+                    </div>
+                  </div>
+                  <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px' }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Max Amount / Period</div>
+                    <div style={{ fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>
+                      ${(customLimits ? customLimits.maxAmountPerPayPeriod : 10000).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+                {customLimits && (
+                  <div style={{ fontSize: '11px', color: '#3b82f6', marginTop: '6px' }}>
+                    Custom limits applied for this employee
+                  </div>
+                )}
+                {!customLimits && (
+                  <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '6px' }}>
+                    Using global defaults
+                  </div>
+                )}
+              </div>
 
               <h4 style={{ fontSize: '14px', color: '#64748b', marginBottom: '8px' }}>Transfer History</h4>
               <div className="table-container">
@@ -1139,6 +1234,70 @@ function EmployeeDetail() {
                   </button>
                   <button type="submit" className="btn btn-primary">
                     Initiate Transfer
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLimitsModal && (
+        <div className="modal-overlay" onClick={() => setShowLimitsModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">Transfer Limits</h3>
+              <button className="modal-close" onClick={() => setShowLimitsModal(false)}>
+                <X />
+              </button>
+            </div>
+            <div className="modal-body">
+              <form onSubmit={handleSaveLimits}>
+                <div className="form-group">
+                  <label className="form-label">Max Transfers Per Day</label>
+                  <input
+                    type="number"
+                    min="1"
+                    className="form-input"
+                    value={limitsForm.maxTransfersPerDay}
+                    onChange={(e) => setLimitsForm({ ...limitsForm, maxTransfersPerDay: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Max Transfers Per Pay Period</label>
+                  <input
+                    type="number"
+                    min="1"
+                    className="form-input"
+                    value={limitsForm.maxTransfersPerPayPeriod}
+                    onChange={(e) => setLimitsForm({ ...limitsForm, maxTransfersPerPayPeriod: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Max Amount Per Pay Period ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    className="form-input"
+                    value={limitsForm.maxAmountPerPayPeriod}
+                    onChange={(e) => setLimitsForm({ ...limitsForm, maxAmountPerPayPeriod: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="form-actions">
+                  {customLimits && (
+                    <button type="button" className="btn btn-danger" onClick={handleResetLimits}>
+                      Reset to Defaults
+                    </button>
+                  )}
+                  <button type="button" className="btn btn-secondary" onClick={() => setShowLimitsModal(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    Save Limits
                   </button>
                 </div>
               </form>

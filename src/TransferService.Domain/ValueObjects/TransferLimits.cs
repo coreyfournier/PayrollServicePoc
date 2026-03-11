@@ -1,3 +1,5 @@
+using TransferService.Domain.Entities;
+
 namespace TransferService.Domain.ValueObjects;
 
 public record TransferLimits(
@@ -6,6 +8,9 @@ public record TransferLimits(
     int MaxTransfersPerDay)
 {
     public static TransferLimits Default => new(5, 10000m, 1);
+
+    public static TransferLimits FromEmployeeOverride(EmployeeTransferLimits overrides) =>
+        new(overrides.MaxTransfersPerPayPeriod, overrides.MaxAmountPerPayPeriod, overrides.MaxTransfersPerDay);
 
     public TransferLimitValidationResult Validate(
         int currentPeriodCount,

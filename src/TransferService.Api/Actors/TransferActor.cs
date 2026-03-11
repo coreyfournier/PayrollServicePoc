@@ -16,6 +16,7 @@ public class TransferActor : Actor, ITransferActor
 {
     private readonly ITransferRepository _transferRepository;
     private readonly IBankAccountRepository _bankAccountRepository;
+    private readonly IEmployeeTransferLimitsRepository _limitsRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly DaprWorkflowClient _workflowClient;
     private readonly TransferLimitsOptions _options;
@@ -24,6 +25,7 @@ public class TransferActor : Actor, ITransferActor
         ActorHost host,
         ITransferRepository transferRepository,
         IBankAccountRepository bankAccountRepository,
+        IEmployeeTransferLimitsRepository limitsRepository,
         IUnitOfWork unitOfWork,
         DaprWorkflowClient workflowClient,
         IOptions<TransferLimitsOptions> options)
@@ -31,6 +33,7 @@ public class TransferActor : Actor, ITransferActor
     {
         _transferRepository = transferRepository;
         _bankAccountRepository = bankAccountRepository;
+        _limitsRepository = limitsRepository;
         _unitOfWork = unitOfWork;
         _workflowClient = workflowClient;
         _options = options.Value;
@@ -56,7 +59,10 @@ public class TransferActor : Actor, ITransferActor
         var todayStart = DateTime.UtcNow.Date;
         var transfersToday = await _transferRepository.GetCountByEmployeeAndDateAsync(employeeId, todayStart);
 
-        var limits = new TransferLimits(_options.MaxPerPayPeriod, _options.MaxAmountPerPayPeriod, _options.MaxPerDay);
+        var employeeOverride = await _limitsRepository.GetByEmployeeIdAsync(employeeId);
+        var limits = employeeOverride != null
+            ? TransferLimits.FromEmployeeOverride(employeeOverride)
+            : new TransferLimits(_options.MaxPerPayPeriod, _options.MaxAmountPerPayPeriod, _options.MaxPerDay);
         var validation = limits.Validate(currentCount, currentAmount, request.Amount, transfersToday);
 
         if (!validation.CanTransfer)

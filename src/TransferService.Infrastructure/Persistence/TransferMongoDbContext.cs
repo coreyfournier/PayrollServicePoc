@@ -69,6 +69,7 @@ public class TransferMongoDbContext
 
     public IMongoCollection<Transfer> Transfers => _database.GetCollection<Transfer>("transfers");
     public IMongoCollection<BankAccount> BankAccounts => _database.GetCollection<BankAccount>("bank_accounts");
+    public IMongoCollection<EmployeeTransferLimits> EmployeeTransferLimits => _database.GetCollection<EmployeeTransferLimits>("employee_transfer_limits");
 
     public async Task InitializeAsync()
     {
@@ -86,5 +87,10 @@ public class TransferMongoDbContext
 
         await BankAccounts.Indexes.CreateOneAsync(
             new CreateIndexModel<BankAccount>(Builders<BankAccount>.IndexKeys.Ascending(a => a.EmployeeId)));
+
+        await EmployeeTransferLimits.Indexes.CreateOneAsync(
+            new CreateIndexModel<EmployeeTransferLimits>(
+                Builders<EmployeeTransferLimits>.IndexKeys.Ascending(l => l.EmployeeId),
+                new CreateIndexOptions { Unique = true }));
     }
 }

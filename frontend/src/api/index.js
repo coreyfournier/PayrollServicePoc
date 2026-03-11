@@ -39,6 +39,11 @@ export const initiateTransfer = (data) => api.post('/transfers', data);
 export const getTransferLimits = (employeeId, payPeriodNumber) => api.get(`/transfers/employee/${employeeId}/limits`, { params: { payPeriodNumber } });
 export const acceptTransferBalanceChange = (transferId, accepted) => api.post(`/transfers/${transferId}/accept`, { accepted });
 
+// Employee Transfer Limits (custom per-employee overrides)
+export const getEmployeeTransferLimits = (employeeId) => api.get(`/transfers/employee/${employeeId}/custom-limits`);
+export const setEmployeeTransferLimits = (employeeId, data) => api.put(`/transfers/employee/${employeeId}/custom-limits`, data);
+export const deleteEmployeeTransferLimits = (employeeId) => api.delete(`/transfers/employee/${employeeId}/custom-limits`);
+
 // Bank Accounts
 export const getBankAccounts = (employeeId) => api.get(`/bankaccounts/employee/${employeeId}`);
 export const createBankAccount = (data) => api.post('/bankaccounts', data);

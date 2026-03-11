@@ -4,7 +4,7 @@ using TransferService.Application.DTOs;
 using TransferService.Application.Options;
 using TransferService.Domain.Enums;
 using TransferService.Domain.Repositories;
-using TransferService.Domain.ValueObjects;
+using DomainTransferLimits = TransferService.Domain.ValueObjects.TransferLimits;
 
 namespace TransferService.Application.Queries.Transfer;
 
@@ -13,11 +13,16 @@ public record GetTransferLimitsQuery(Guid EmployeeId, long PayPeriodNumber) : IR
 public class GetTransferLimitsQueryHandler : IRequestHandler<GetTransferLimitsQuery, TransferLimitsDto>
 {
     private readonly ITransferRepository _repository;
+    private readonly IEmployeeTransferLimitsRepository _limitsRepository;
     private readonly TransferLimitsOptions _options;
 
-    public GetTransferLimitsQueryHandler(ITransferRepository repository, IOptions<TransferLimitsOptions> options)
+    public GetTransferLimitsQueryHandler(
+        ITransferRepository repository,
+        IEmployeeTransferLimitsRepository limitsRepository,
+        IOptions<TransferLimitsOptions> options)
     {
         _repository = repository;
+        _limitsRepository = limitsRepository;
         _options = options.Value;
     }
 
@@ -34,7 +39,11 @@ public class GetTransferLimitsQueryHandler : IRequestHandler<GetTransferLimitsQu
         var transfersToday = await _repository.GetCountByEmployeeAndDateAsync(
             request.EmployeeId, todayStart, cancellationToken);
 
-        var limits = new TransferLimits(_options.MaxPerPayPeriod, _options.MaxAmountPerPayPeriod, _options.MaxPerDay);
+        var employeeOverride = await _limitsRepository.GetByEmployeeIdAsync(request.EmployeeId, cancellationToken);
+        var isCustom = employeeOverride != null;
+        var limits = employeeOverride != null
+            ? DomainTransferLimits.FromEmployeeOverride(employeeOverride)
+            : new DomainTransferLimits(_options.MaxPerPayPeriod, _options.MaxAmountPerPayPeriod, _options.MaxPerDay);
         var validation = limits.Validate(currentCount, currentAmount, 0, transfersToday);
 
         return new TransferLimitsDto(
@@ -44,6 +53,7 @@ public class GetTransferLimitsQueryHandler : IRequestHandler<GetTransferLimitsQu
             currentCount,
             currentAmount,
             transfersToday,
-            validation.CanTransfer);
+            validation.CanTransfer,
+            isCustom);
     }
 }

@@ -19,6 +19,7 @@ public static class DependencyInjection
 
         services.AddScoped<ITransferRepository, DaprTransferRepository>();
         services.AddScoped<IBankAccountRepository, DaprBankAccountRepository>();
+        services.AddScoped<IEmployeeTransferLimitsRepository, EmployeeTransferLimitsRepository>();
         services.AddScoped<IUnitOfWork, DaprStateStoreUnitOfWork>();
         services.AddScoped<IBankTransferService, SimulatedBankService>();
 

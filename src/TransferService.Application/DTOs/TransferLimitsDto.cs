@@ -7,4 +7,5 @@ public record TransferLimitsDto(
     int CurrentPeriodCount,
     decimal CurrentPeriodAmount,
     int TransfersToday,
-    bool CanTransfer);
+    bool CanTransfer,
+    bool IsCustom);
