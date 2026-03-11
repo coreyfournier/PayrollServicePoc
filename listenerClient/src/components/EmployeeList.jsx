@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useSubscription } from 'urql';
-import { GET_ALL_EMPLOYEES, DELETE_ALL_EMPLOYEES } from '../graphql/queries';
-import { EMPLOYEE_CHANGE_SUBSCRIPTION } from '../graphql/subscriptions';
+import { GET_ALL_EMPLOYEES, GET_ALL_TRANSFERS, DELETE_ALL_EMPLOYEES } from '../graphql/queries';
+import { EMPLOYEE_CHANGE_SUBSCRIPTION, TRANSFER_CHANGE_SUBSCRIPTION } from '../graphql/subscriptions';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import TransferPanel from './TransferPanel';
 
@@ -80,15 +80,19 @@ export default function EmployeeList() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
   const [view, setView] = useState('pay'); // 'pay' or 'transfer'
+  const [transferFromPay, setTransferFromPay] = useState(false);
 
   const [employees, setEmployees] = useState([]);
+  const [transferMap, setTransferMap] = useState({});
   const [highlightedIds, setHighlightedIds] = useState(new Map());
   const highlightTimers = useRef(new Map());
   const queryInitialized = useRef(false);
 
   const { data, fetching, error } = result;
+  const [transfersResult] = useQuery({ query: GET_ALL_TRANSFERS });
 
   const [subResult] = useSubscription({ query: EMPLOYEE_CHANGE_SUBSCRIPTION });
+  const [transferSubResult] = useSubscription({ query: TRANSFER_CHANGE_SUBSCRIPTION });
 
   const triggerHighlight = useCallback((id, changeType) => {
     setHighlightedIds(prev => {
@@ -150,6 +154,36 @@ export default function EmployeeList() {
     triggerHighlight(incoming.id, changeType);
   }, [subResult.data, triggerHighlight]);
 
+  // Build transfer map from query result
+  useEffect(() => {
+    if (!transfersResult.data?.transfers) return;
+    const map = {};
+    for (const t of transfersResult.data.transfers) {
+      if (!map[t.employeeId]) map[t.employeeId] = [];
+      map[t.employeeId].push(t);
+    }
+    setTransferMap(map);
+  }, [transfersResult.data]);
+
+  // Merge transfer subscription events into map
+  useEffect(() => {
+    if (!transferSubResult.data?.onTransferChanged) return;
+    const { transfer: incoming } = transferSubResult.data.onTransferChanged;
+
+    setTransferMap(prev => {
+      const list = [...(prev[incoming.employeeId] || [])];
+      const idx = list.findIndex(t => t.id === incoming.id);
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], ...incoming };
+      } else {
+        list.unshift(incoming);
+      }
+      return { ...prev, [incoming.employeeId]: list };
+    });
+
+    triggerHighlight(incoming.employeeId, 'transferUpdate');
+  }, [transferSubResult.data, triggerHighlight]);
+
   const handleDeleteAll = async () => {
     await deleteAllEmployees();
     setShowConfirm(false);
@@ -172,9 +206,19 @@ export default function EmployeeList() {
         return 'row-highlight-red';
       case 'payUpdated':
         return 'row-highlight-amber';
+      case 'transferUpdate':
+        return 'row-highlight-blue';
       default:
         return 'row-highlight-blue';
     }
+  };
+
+  const TERMINAL = ['Completed', 'Failed'];
+  const getTransferIndicator = (employeeId) => {
+    const list = transferMap[employeeId] || [];
+    const active = list.filter(t => !TERMINAL.includes(t.status));
+    const awaiting = active.filter(t => t.status === 'AwaitingConfirmation');
+    return { total: list.length, active: active.length, awaiting: awaiting.length };
   };
 
   // Derive selected employee from live state so the modal reflects updates
@@ -239,7 +283,7 @@ export default function EmployeeList() {
         <PayDetailModal
           employee={selectedEmployee}
           onClose={() => { setSelectedEmployeeId(null); setView('pay'); }}
-          onTransfer={() => setView('transfer')}
+          onTransfer={() => { setTransferFromPay(true); setView('transfer'); }}
         />
       )}
 
@@ -247,7 +291,7 @@ export default function EmployeeList() {
         <TransferPanel
           employee={selectedEmployee}
           onClose={() => { setSelectedEmployeeId(null); setView('pay'); }}
-          onBack={() => setView('pay')}
+          onBack={transferFromPay ? () => setView('pay') : null}
         />
       )}
 
@@ -279,6 +323,7 @@ export default function EmployeeList() {
                   <th>Pay Type</th>
                   <th>Pay Rate</th>
                   <th>Net Pay</th>
+                  <th>Transfers</th>
                   <th>Status</th>
                   <th>Last Event</th>
                   <th>Updated</th>
@@ -308,6 +353,37 @@ export default function EmployeeList() {
                       {employee.payAttributes
                         ? `$${Number(employee.payAttributes.netPay).toFixed(2)}`
                         : '\u2014'}
+                    </td>
+                    <td className="transfer-indicator-cell">
+                      {(() => {
+                        const ti = getTransferIndicator(employee.id);
+                        if (ti.total === 0) return <span className="transfer-indicator-none">&mdash;</span>;
+                        const openTransfers = (e) => {
+                          e.stopPropagation();
+                          setSelectedEmployeeId(employee.id);
+                          setTransferFromPay(false);
+                          setView('transfer');
+                        };
+                        return (
+                          <span className="transfer-indicator" onClick={openTransfers} style={{ cursor: 'pointer' }}>
+                            {ti.awaiting > 0 && (
+                              <span className="transfer-badge-awaiting" title={`${ti.awaiting} awaiting confirmation — click to inspect`}>
+                                &#9888; {ti.awaiting}
+                              </span>
+                            )}
+                            {ti.active > 0 && ti.awaiting === 0 && (
+                              <span className="transfer-badge-active" title={`${ti.active} in progress — click to inspect`}>
+                                {ti.active} active
+                              </span>
+                            )}
+                            {ti.active === 0 && (
+                              <span className="transfer-badge-done" title={`${ti.total} total transfers — click to inspect`}>
+                                {ti.total} total
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td>
                       <span className={`status-badge ${employee.isActive ? 'active' : 'inactive'}`}>

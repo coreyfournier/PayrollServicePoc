@@ -18,6 +18,8 @@ public class EventProcessor
         ["Queued"] = 0,
         ["Initiated"] = 1,
         ["AwaitingConfirmation"] = 2,
+        ["AcceptPending"] = 2,
+        ["RejectPending"] = 2,
         ["Processing"] = 3,
         ["Completed"] = 4,
         ["Failed"] = 4

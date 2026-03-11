@@ -6,12 +6,17 @@ export default function App() {
   return (
     <UrqlProvider value={urqlClient}>
       <div className="app">
-        <header>
-          <h1>Employee Change Listener</h1>
-        </header>
-        <main>
+        <div className="app-header">
+          <div className="header-content">
+            <div className="header-brand">
+              <h1>PayrollPro Live</h1>
+              <p>Real-time employee and transfer monitoring</p>
+            </div>
+          </div>
+        </div>
+        <div className="app-body">
           <EmployeeList />
-        </main>
+        </div>
       </div>
     </UrqlProvider>
   );

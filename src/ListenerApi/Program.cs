@@ -51,8 +51,10 @@ builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher
 builder.Services
     .AddGraphQLServer()
     .AddQueryType<EmployeeQuery>()
+    .AddTypeExtension<TransferQuery>()
     .AddMutationType<EmployeeMutation>()
     .AddSubscriptionType<EmployeeSubscription>()
+    .AddTypeExtension<TransferSubscription>()
     .AddInMemorySubscriptions()
     .AddFiltering()
     .AddSorting();

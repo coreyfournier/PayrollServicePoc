@@ -121,32 +121,55 @@ public class TransfersController : ControllerBase
         using var reader = new StreamReader(Request.Body);
         var body = await reader.ReadToEndAsync();
 
-        // If Dapr wraps the message in a CloudEvent, extract the "data" field
-        TransferRequestEvent? request = null;
+        JsonElement root;
         try
         {
             using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.TryGetProperty("data", out var dataElement))
-            {
-                // CloudEvent envelope — extract data (may be string or object)
-                if (dataElement.ValueKind == JsonValueKind.String)
-                    request = JsonSerializer.Deserialize<TransferRequestEvent>(dataElement.GetString()!,
-                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                else
-                    request = JsonSerializer.Deserialize<TransferRequestEvent>(dataElement.GetRawText(),
-                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            }
-            else
-            {
-                // Raw JSON payload (no CloudEvent wrapper)
-                request = JsonSerializer.Deserialize<TransferRequestEvent>(body,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            }
+            root = doc.RootElement.Clone();
         }
         catch (JsonException)
         {
             return BadRequest("Invalid JSON payload");
         }
+
+        // Extract payload from CloudEvent wrapper if present
+        var payload = root;
+        if (root.TryGetProperty("data", out var dataElement))
+        {
+            if (dataElement.ValueKind == JsonValueKind.String)
+            {
+                try { payload = JsonDocument.Parse(dataElement.GetString()!).RootElement; }
+                catch { return BadRequest("Invalid data payload"); }
+            }
+            else
+            {
+                payload = dataElement;
+            }
+        }
+
+        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+        // Route by action type
+        var action = payload.TryGetProperty("Action", out var actionProp)
+            ? actionProp.GetString()
+            : payload.TryGetProperty("action", out var actionPropLower)
+                ? actionPropLower.GetString()
+                : null;
+
+        if (action == "accept-balance")
+        {
+            // Accept/reject balance change — raise workflow event
+            var cmd = JsonSerializer.Deserialize<AcceptBalanceCommand>(payload.GetRawText(), opts);
+            if (cmd == null || cmd.TransferId == Guid.Empty)
+                return BadRequest("Missing required accept-balance fields");
+
+            var workflowId = $"transfer-{cmd.TransferId}";
+            await _workflowClient.RaiseEventAsync(workflowId, "BalanceAccepted", cmd.Accepted);
+            return Ok();
+        }
+
+        // Default: initiate transfer
+        var request = JsonSerializer.Deserialize<TransferRequestEvent>(payload.GetRawText(), opts);
 
         if (request == null || request.EmployeeId == Guid.Empty)
             return BadRequest("Missing required transfer request fields");
@@ -166,5 +189,10 @@ public record TransferRequestEvent(
     decimal Amount,
     long PayPeriodNumber,
     Guid BankAccountId);
+
+public record AcceptBalanceCommand(
+    Guid TransferId,
+    Guid EmployeeId,
+    bool Accepted);
 
 public record AcceptBalanceChangeDto(bool Accepted);

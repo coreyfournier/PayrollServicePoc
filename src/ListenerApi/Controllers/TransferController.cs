@@ -102,26 +102,53 @@ public class TransferController : ControllerBase
 
     /// <summary>
     /// Accept or reject a balance change for a transfer awaiting confirmation.
-    /// Forwards to payroll-api via Dapr service invocation.
+    /// Uses the Debezium Outbox Pattern — a single MySQL transaction atomically updates
+    /// the TransferRecord status and writes an OutboxMessage command. Debezium CDC publishes
+    /// the command to Kafka, where TransferService picks it up and raises the workflow event.
     /// </summary>
     [HttpPost("{id:guid}/accept")]
     public async Task<ActionResult> AcceptBalanceChange(Guid id, [FromBody] AcceptBalanceChangeRequest request)
     {
-        try
+        var transfer = await _transferRepository.GetByIdAsync(id);
+        if (transfer == null)
+            return NotFound("Transfer not found.");
+
+        if (transfer.Status != "AwaitingConfirmation")
+            return BadRequest($"Transfer is not awaiting confirmation (current status: {transfer.Status}).");
+
+        var now = DateTime.UtcNow;
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync();
+
+        // Update read model to provide immediate feedback
+        transfer.Status = request.Accepted ? "AcceptPending" : "RejectPending";
+        transfer.UpdatedAt = now;
+        _dbContext.TransferRecords.Update(transfer);
+
+        var outboxMessage = new OutboxMessage
         {
-            var httpRequest = _daprClient.CreateInvokeMethodRequest(
-                HttpMethod.Post,
-                "payroll-api",
-                $"api/transfers/{id}/accept",
-                new { Accepted = request.Accepted });
-            await _daprClient.InvokeMethodAsync(httpRequest);
-            return Ok();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to forward accept/reject for transfer {TransferId}", id);
-            return StatusCode(502, "Failed to reach payroll service.");
-        }
+            Id = Guid.NewGuid(),
+            AggregateId = transfer.EmployeeId.ToString(),
+            Topic = TransferRequestsTopic,
+            Payload = JsonSerializer.Serialize(new
+            {
+                Action = "accept-balance",
+                TransferId = id,
+                transfer.EmployeeId,
+                Accepted = request.Accepted
+            }),
+            CreatedAt = now
+        };
+        _dbContext.OutboxMessages.Add(outboxMessage);
+
+        await _dbContext.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        _logger.LogInformation(
+            "Transfer {TransferId} balance {Action} queued via outbox {OutboxId}",
+            id, request.Accepted ? "accept" : "reject", outboxMessage.Id);
+
+        return Ok(transfer);
     }
 
     [HttpGet("employee/{employeeId:guid}")]

@@ -55,6 +55,18 @@ export const GET_TRANSFERS_BY_EMPLOYEE = `
   }
 `;
 
+export const GET_ALL_TRANSFERS = `
+  query GetAllTransfers {
+    transfers {
+      id
+      employeeId
+      status
+      amount
+      currentBalance
+    }
+  }
+`;
+
 export const DELETE_ALL_EMPLOYEES = `
   mutation DeleteAllEmployees {
     deleteAllEmployees {

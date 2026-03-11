@@ -116,7 +116,17 @@ export default function TransferPanel({ employee, onClose, onBack }) {
       case 'Completed': return 'transfer-status-success';
       case 'Failed': return 'transfer-status-danger';
       case 'AwaitingConfirmation': return 'transfer-status-info';
+      case 'AcceptPending': return 'transfer-status-info';
+      case 'RejectPending': return 'transfer-status-danger';
       default: return 'transfer-status-warning';
+    }
+  };
+
+  const statusLabel = (status) => {
+    switch (status) {
+      case 'AcceptPending': return 'Accepting...';
+      case 'RejectPending': return 'Rejecting...';
+      default: return status;
     }
   };
 
@@ -211,7 +221,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
                     <td>{t.payPeriodNumber}</td>
                     <td>
                       <span className={`transfer-status ${statusClass(t.status)}`}>
-                        {t.status}
+                        {statusLabel(t.status)}
                       </span>
                       {t.status === 'AwaitingConfirmation' && (
                         <div className="transfer-confirm-actions">
