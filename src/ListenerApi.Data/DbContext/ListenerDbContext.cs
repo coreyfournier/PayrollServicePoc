@@ -74,6 +74,7 @@ public class ListenerDbContext : Microsoft.EntityFrameworkCore.DbContext
             entity.Property(e => e.AggregateId).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Topic).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Payload).IsRequired().HasColumnType("json");
+            entity.HasIndex(e => e.CreatedAt);
         });
     }
 }

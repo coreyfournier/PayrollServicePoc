@@ -193,6 +193,8 @@ namespace ListenerApi.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CreatedAt");
+
                     b.ToTable("OutboxMessages");
                 });
 

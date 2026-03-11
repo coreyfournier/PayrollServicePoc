@@ -18,6 +18,11 @@ namespace ListenerApi.Data.Migrations
         /// </summary>
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.CreateIndex(
+                name: "IX_OutboxMessages_CreatedAt",
+                table: "OutboxMessages",
+                column: "CreatedAt");
+
             migrationBuilder.Sql(@"
                 DROP EVENT IF EXISTS cleanup_outbox_messages;
                 CREATE EVENT cleanup_outbox_messages
@@ -30,6 +35,10 @@ namespace ListenerApi.Data.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.Sql("DROP EVENT IF EXISTS cleanup_outbox_messages;");
+
+            migrationBuilder.DropIndex(
+                name: "IX_OutboxMessages_CreatedAt",
+                table: "OutboxMessages");
         }
     }
 }
