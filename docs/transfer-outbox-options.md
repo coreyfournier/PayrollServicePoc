@@ -380,4 +380,4 @@ The only scenario where cleanup could cause issues is if the **MySQL binlog itse
 
 **Prerequisites:**
 - MySQL must be started with `--event-scheduler=ON` (configured in `docker-compose.yaml`)
-- The event is created by `scripts/seed.sh` after the Debezium connector is registered
+- The event is created via EF Core migration `20260311120000_AddOutboxCleanupEvent`, applied automatically when ListenerApi starts up — making it a deployment dependency rather than a seed-time concern
