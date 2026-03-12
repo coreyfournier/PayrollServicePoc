@@ -159,11 +159,186 @@ Three components work together to power the search experience:
    - **Simple search** — text input with filter chips for pay type, active status, and pay period fields
    - **Advanced query builder** — AND/OR condition groups with nested field support for building precise queries
 
+## Transfer Service (Separate Bounded Context)
+
+The transfer feature is a fully independent bounded context (`TransferService.*`) demonstrating Dapr Actors, Dapr Workflows, the Debezium Outbox Pattern, and CDC-based command dispatch — all integrated through Kafka.
+
+### Architecture Overview
+
+```
+PayrollPro Client / Frontend
+    │
+    ├─► Direct: POST transfer-api/api/Transfers
+    │     └─► TransferActor (Dapr, keyed by employeeId)
+    │
+    └─► Async: POST listener-api/api/Transfer
+          └─► MySQL Transaction (TransferRecord + OutboxMessage)
+                └─► Debezium CDC → Kafka → TransferActor
+```
+
+TransferService has its own MongoDB database (`transfer_db`), Dapr state store (`statestore-transfers`), and Dapr sidecar — completely independent of PayrollService.
+
+### Debezium Outbox Pattern (Command Dispatch)
+
+ListenerApi uses the **Debezium Outbox Pattern** — an industry-standard approach used by Netflix, Airbnb, WePay, and Zalando. Instead of publishing directly to Kafka (which creates a dual-write problem), a single MySQL transaction atomically writes both the client read model and a command envelope:
+
+```
+BEGIN MySQL Transaction
+  INSERT TransferRecord     (status = "Queued", visible to client immediately)
+  INSERT OutboxMessage      (topic = "transfer-requests", payload = command JSON)
+COMMIT
+```
+
+**Debezium's MySQL CDC connector** (running as a Kafka Connect plugin) tails the MySQL binlog and routes each outbox row to the Kafka topic specified in the row's `Topic` column, using `AggregateId` as the Kafka message key to preserve per-employee ordering.
+
+This guarantees:
+- **Atomicity** — the transfer record and the command to process it succeed or fail together in one MySQL transaction
+- **Guaranteed delivery** — Debezium handles publish, retry, and offset tracking via the binlog
+- **Repeatable reads** — the client always sees the transfer on refresh (MySQL is the source of truth for the read model)
+- **No custom publisher** — no background polling service; Debezium runs as a Kafka Connect connector already in the stack
+- **Low latency** — binlog tailing is near-real-time (~100ms)
+
+The same outbox pattern is used for both transfer initiation and accept/reject commands. A single Kafka topic (`transfer-requests`) carries both, routed by an `Action` field in the JSON payload.
+
+### Change Data Capture (CDC) Pipeline
+
+```
+MySQL (listener_db)
+  │
+  │ binlog stream
+  ▼
+Debezium MySQL Source Connector (Kafka Connect)
+  │ outbox-event-router SMT
+  │   • Reads Topic column → routes to correct Kafka topic
+  │   • Reads AggregateId → sets as Kafka message key (ordering)
+  │   • Reads Payload → sends as message value
+  ▼
+Kafka (transfer-requests topic)
+  │
+  ▼
+TransferService.Api (Dapr subscription on transfer-requests)
+  │ Routes by Action field:
+  │   • null/missing → initiate transfer (via TransferActor)
+  │   • "accept-balance" → raise workflow event (BalanceAccepted)
+  ▼
+TransferActor / TransferWorkflow
+```
+
+### Dapr Actors (Concurrency Control)
+
+`TransferActor` is keyed by `employeeId`. Dapr Actors guarantee **single-threaded execution per actor ID**, eliminating concurrent transfer races without manual locking. The actor:
+
+1. Validates bank account ownership
+2. Checks transfer limits (daily count, pay period count, pay period amount)
+3. Creates the Transfer entity atomically via `DaprTransferStateStoreUnitOfWork`
+4. Schedules the `TransferWorkflow`
+
+### Dapr Workflow (Durable Orchestration)
+
+`TransferWorkflow` uses the Durable Task Framework to orchestrate the transfer lifecycle:
+
+```
+TransferWorkflow
+  1. ValidateTransferActivity      → verify transfer exists in state store
+  2. VerifyBalanceActivity         → query ksqlDB for employee's current net pay
+  │   ├─ Balance sufficient        → continue to step 3
+  │   └─ Balance insufficient      → MarkAwaitingConfirmationActivity
+  │       └─ WaitForExternalEvent("BalanceAccepted", 24h timeout)
+  │           ├─ Accepted          → continue to step 3
+  │           └─ Rejected/timeout  → FailTransferActivity
+  3. UpdateTransferStatusActivity  → mark as Processing
+  4. ExecuteBankTransferActivity   → call SimulatedBankService
+  │   └─ Retry up to 3× with exponential backoff (2s, 4s, 8s)
+  5. CompleteTransferActivity      → mark as Completed
+     or FailTransferActivity       → mark as Failed
+```
+
+Each state change writes atomically to the Dapr state store with outbox, publishing to the `transfer-events` Kafka topic. ListenerApi subscribes to `transfer-events` and updates the MySQL `TransferRecords` table, which feeds GraphQL subscriptions for real-time UI updates.
+
+### Transfer Limits
+
+Configurable via environment variables (`TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`). Enforced authoritatively by TransferService inside the actor. ListenerApi performs a best-effort pre-check from its materialized MySQL data. The `GET /api/transfers/employee/{id}/limits` endpoint returns current usage and a `canTransfer` boolean.
+
+### Kafka Topics (Transfers)
+
+| Topic | Producer | Consumer | Description |
+|-------|----------|----------|-------------|
+| `transfer-requests` | Debezium CDC (from ListenerApi MySQL outbox) | TransferService.Api (Dapr subscription) | Commands: initiate transfer, accept/reject balance change |
+| `transfer-events` | TransferService.Api (Dapr state store outbox) | ListenerApi (Dapr subscription) | State changes: Initiated, AwaitingConfirmation, Processing, Completed, Failed |
+
+### Two Databases
+
+| Database | Technology | Role | Written By |
+|----------|-----------|------|-----------|
+| `transfer_db` | MongoDB | Authoritative transfer & bank account data | TransferService via Dapr state store (atomic outbox) |
+| `listener_db.TransferRecords` | MySQL | Client read model, GraphQL queries & subscriptions | ListenerApi (from `transfer-events` Kafka topic) |
+
+### Outbox Cleanup
+
+OutboxMessages rows accumulate in MySQL unless cleaned up. A **MySQL scheduled event** (created via EF Core migration, applied automatically on startup) purges rows older than 2 hours:
+
+```sql
+CREATE EVENT cleanup_outbox_messages
+  ON SCHEDULE EVERY 2 HOUR
+  DO DELETE FROM OutboxMessages WHERE CreatedAt < NOW() - INTERVAL 2 HOUR;
+```
+
+This is safe because Debezium reads from the MySQL **binlog**, not the table. Once a row is INSERTed, that INSERT is permanently in the binlog. Debezium tracks its binlog offset, so it sees every INSERT regardless of whether the row still exists. The 2-hour retention is a convenience window for debugging.
+
+### Simulated Bank Service
+
+`SimulatedBankService` adds random delays (1–10s) and ~20% failure rate to test the workflow's retry logic with exponential backoff.
+
+### End-to-End Data Flow
+
+```
+Client (PayrollPro Client or Frontend)
+  │
+  │ POST listener-api/api/Transfer
+  ▼
+ListenerApi ─── MySQL Transaction ──┐
+  │                                 │
+  │  TransferRecord (Queued)        │  OutboxMessage
+  │  ← client sees immediately      │  (topic: transfer-requests)
+  │                                 │
+  │                                 ▼
+  │                           MySQL Binlog
+  │                                 │
+  │                           Debezium CDC
+  │                           (Kafka Connect)
+  │                                 │
+  │                                 ▼
+  │                     Kafka: transfer-requests
+  │                                 │
+  │                                 ▼
+  │                     TransferService.Api
+  │                       TransferActor
+  │                         │ validate → limits check → create
+  │                         ▼
+  │                       TransferWorkflow
+  │                         │ verify balance → process → bank transfer
+  │                         │
+  │                         │ each state change →
+  │                         │   Dapr state store (atomic outbox)
+  │                         │     → Kafka: transfer-events
+  │                         ▼
+  │                     Kafka: transfer-events
+  │                                 │
+  │◄────────────────────────────────┘
+  │  Dapr subscription
+  │  UPDATE TransferRecord in MySQL
+  │    Queued → Initiated → Processing → Completed
+  │
+  ▼
+GraphQL subscription → PayrollPro Client (real-time UI update)
+```
+
 ## Services
 
 | Service | Port | Description |
 |---------|------|-------------|
 | payroll-api | 5000 | Payroll API Service (Swagger at /swagger) |
+| transfer-api | 5002 | Transfer API Service (Swagger at /swagger) |
 | listener-api | 5001 | GraphQL Listener API (/graphql) |
 | frontend | 3000 | React frontend (REST client) |
 | payrollpro-client | 3001 | React frontend (GraphQL subscription client) |
@@ -172,8 +347,8 @@ Three components work together to power the search experience:
 | kafka | 9092/29092 | Kafka Message Broker |
 | ksqldb-server | 8088 | ksqlDB REST API for stream processing |
 | elasticsearch | 9200 | Search index |
-| kafka-connect | 8083 | Kafka Connect (ES sink connector) |
-| kafka-ui | 8080 | Kafka monitoring UI (also has ksqlDB query tab) |
+| kafka-connect | 8083 | Kafka Connect (ES sink + Debezium MySQL CDC) |
+| kafka-ui | 8089 | Kafka monitoring UI (also has ksqlDB query tab) |
 | zookeeper | 2181 | Zookeeper (Kafka dependency) |
 | zipkin | 9411 | Distributed Tracing |
 
@@ -202,6 +377,26 @@ Three components work together to power the search experience:
 - `PUT /api/deductions/{id}` - Update deduction
 - `DELETE /api/deductions/{id}` - Deactivate deduction
 
+### Transfers (transfer-api, port 5002)
+- `POST /api/transfers` - Initiate a transfer (via TransferActor)
+- `GET /api/transfers/recent?limit=50&status=Processing` - Get recent transfers with optional status filter
+- `GET /api/transfers/employee/{employeeId}` - Get transfers for employee
+- `GET /api/transfers/{id}` - Get transfer by ID
+- `GET /api/transfers/{id}/workflow` - Get workflow state for a transfer
+- `POST /api/transfers/{id}/accept` - Accept or reject a balance change (direct)
+- `GET /api/transfers/employee/{employeeId}/limits` - Get transfer limits and current usage
+
+### Transfers (listener-api, port 5001 — async via outbox)
+- `POST /api/transfer` - Initiate a transfer (via Debezium outbox → Kafka → TransferActor)
+- `POST /api/transfer/{id}/accept` - Accept/reject balance change (via Debezium outbox → Kafka → workflow event)
+- `GET /api/transfer/employee/{employeeId}` - Get transfers for employee (from MySQL read model)
+- `GET /api/transfer/employee/{employeeId}/limits` - Get transfer limits (best-effort pre-check)
+
+### Bank Accounts (transfer-api, port 5002)
+- `GET /api/bankaccounts/employee/{employeeId}` - Get bank accounts for employee
+- `POST /api/bankaccounts` - Create bank account
+- `DELETE /api/bankaccounts/{id}` - Delete bank account
+
 ## Kafka Topics
 
 The following topics are created by the `kafka-init` container on startup:
@@ -217,6 +412,8 @@ The following topics are created by the `kafka-init` container on startup:
 | `employee-net-pay` | NetPayProcessor | Net pay breakdown per employee per pay period (gross - taxes - deductions). Compacted topic |
 | `employee-info` | ksqlDB | Latest employee state per ID, produced by the `EMPLOYEE_INFO` table. Compacted topic |
 | `employee-search` | ElasticsearchUpdater | Combined employee + last 4 pay period documents for ES indexing. Compacted topic |
+| `transfer-requests` | Debezium CDC (ListenerApi MySQL outbox) | Transfer commands dispatched via CDC: initiate transfer and accept/reject balance change |
+| `transfer-events` | Dapr outbox (transfer-api) | Transfer state changes published via Dapr state store outbox (Initiated, AwaitingConfirmation, Processing, Completed, Failed) |
 
 Additional internal topics managed by ksqlDB (created/dropped by `ksqldb-init`):
 
@@ -268,8 +465,16 @@ DaprPoc/
 │   ├── PayrollService.Application/   # MediatR CQRS (commands, queries, DTOs)
 │   ├── PayrollService.Domain/        # Entities, domain events, repository interfaces
 │   ├── PayrollService.Infrastructure/ # MongoDB persistence, Dapr state store, event publishing
+│   ├── TransferService.Api/          # Transfer API: Dapr Actors, Workflows, controllers
+│   │   ├── Actors/TransferActor.cs   # Dapr Actor (keyed by employeeId, concurrency control)
+│   │   └── Workflows/                # TransferWorkflow + 7 activities
+│   ├── TransferService.Application/  # Transfer MediatR CQRS (commands, queries, DTOs)
+│   ├── TransferService.Domain/       # Transfer entities, value objects, repository interfaces
+│   ├── TransferService.Infrastructure/ # MongoDB persistence, Dapr state store, bank service
 │   ├── ListenerApi/                  # HotChocolate GraphQL server (MySQL, Dapr subscriptions)
+│   │   └── Controllers/TransferController.cs  # Debezium outbox command dispatch
 │   ├── ListenerApi.Data/             # EF Core entities and DbContext for ListenerApi
+│   │   └── Entities/OutboxMessage.cs # Debezium outbox entity
 │   ├── NetPayProcessor/              # Kafka Streams net pay calculator (Java 17)
 │   └── ElasticsearchUpdater/         # Kafka consumer for ES search indexing (Java 17)
 ├── frontend/                         # React + Vite REST client
@@ -277,11 +482,13 @@ DaprPoc/
 ├── payrollProClient/                 # React + Vite GraphQL subscription client
 ├── dapr/
 │   ├── components/                   # Dapr component configs (state store, pub/sub)
+│   ├── components-transfer/          # Transfer-specific Dapr components (state store, pub/sub)
 │   └── config.yaml
 ├── docker/
 │   ├── Dockerfile                    # PayrollService.Api
 │   ├── Dockerfile.listenerapi        # ListenerApi
-│   └── Dockerfile.kafka-connect      # Kafka Connect with ES connector plugin
+│   ├── Dockerfile.transferapi        # TransferService.Api
+│   └── Dockerfile.kafka-connect      # Kafka Connect with ES sink + Debezium MySQL CDC
 ├── ksqldb/
 │   └── statements.sql                # ksqlDB stream/table definitions
 ├── scripts/
@@ -321,6 +528,20 @@ docker-compose down -v
 ## Transactional Outbox Pattern
 * Entity state and domain events are written atomically, eliminating the dual-write problem.
 * Events are guaranteed to publish if the entity persists — no "wrote to DB but failed to publish" inconsistency.
+
+## Debezium CDC Outbox (Transfer Commands)
+* Transfer commands are dispatched via the Debezium Outbox Pattern — a single MySQL transaction writes the read model and a command envelope, and Debezium tails the binlog to publish to Kafka.
+* No custom publisher or background polling service — Debezium handles publish, retry, and offset tracking as a Kafka Connect connector.
+* The same pattern handles both transfer initiation and accept/reject commands via a single Kafka topic with action-based routing.
+
+## Dapr Actor Concurrency
+* Transfer actors are keyed by employee ID, guaranteeing single-threaded execution per employee.
+* Eliminates race conditions (e.g., concurrent transfers exceeding limits) without manual locking or database-level optimistic concurrency.
+
+## Durable Workflow Orchestration
+* Dapr Workflows (Durable Task Framework) orchestrate multi-step transfer processing with automatic state persistence.
+* External events (balance accept/reject) can pause and resume workflows with configurable timeouts.
+* Failed bank transfers retry with exponential backoff — the workflow survives service restarts.
 
 ## Derived Data via Stream Processing
 * Business calculations (hours aggregation, gross pay, net pay) happen in specialized processors outside the write service.
