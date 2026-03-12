@@ -149,7 +149,7 @@ function Transfers() {
         const updated = trRes.value.data.find(t => t.id === selectedTransfer.id);
         if (updated) setSelectedTransfer(updated);
       }
-    } catch { }
+    } catch { /* ignore refresh errors */ }
     finally { setWorkflowLoading(false); }
   };
 
@@ -333,7 +333,7 @@ function Transfers() {
 
                   {/* Step Pipeline - vertical for side panel */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    {WORKFLOW_STEPS.map((step, i) => {
+                    {WORKFLOW_STEPS.map((step) => {
                       const status = stepStatuses[step.key] || 'pending';
                       const colors = STEP_COLORS[status];
                       return (

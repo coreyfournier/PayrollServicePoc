@@ -92,14 +92,14 @@ Clock-Out / Time Entry Update
 
 3. **Access the applications**:
    - Frontend (REST client): http://localhost:3000
-   - Listener Client (GraphQL): http://localhost:3001
+   - PayrollPro Client (GraphQL): http://localhost:3001
    - Swagger UI: http://localhost:5000/swagger
    - GraphQL Playground: http://localhost:5001/graphql
 
 4. **View distributed traces**:
    - Zipkin: http://localhost:9411
 
-## Listener API & Listener Client
+## Listener API & PayrollPro Client
 
 The **Listener API** (`src/ListenerApi`) is a .NET 7.0 GraphQL server (HotChocolate) backed by MySQL. It subscribes to the `employee-events` and `employee-net-pay` Kafka topics via Dapr and persists employee records and pay attributes to its own database, demonstrating an event-driven read model. Events are processed idempotently using timestamp comparison. It exposes:
 
@@ -107,7 +107,7 @@ The **Listener API** (`src/ListenerApi`) is a .NET 7.0 GraphQL server (HotChocol
 - **GraphQL mutations** — manage records (e.g., delete all)
 - **GraphQL subscriptions** — real-time WebSocket notifications when employee data changes
 
-The **Listener Client** (`listenerClient/`) is a React + Vite frontend that connects to the Listener API using [urql](https://github.com/urql-graphql/urql) and `graphql-ws`. It provides two views:
+The **PayrollPro Client** (`payrollProClient/`) is a React + Vite frontend that connects to the Listener API using [urql](https://github.com/urql-graphql/urql) and `graphql-ws`. It provides two views:
 
 - **Change Stream** — a live feed of employee changes pushed via GraphQL WebSocket subscriptions in real time
 - **Employee Records** — a queryable list of all employee records stored in the Listener API's MySQL database
@@ -166,7 +166,7 @@ Three components work together to power the search experience:
 | payroll-api | 5000 | Payroll API Service (Swagger at /swagger) |
 | listener-api | 5001 | GraphQL Listener API (/graphql) |
 | frontend | 3000 | React frontend (REST client) |
-| listener-client | 3001 | React frontend (GraphQL subscription client) |
+| payrollpro-client | 3001 | React frontend (GraphQL subscription client) |
 | mongodb | 27017 | MongoDB Database |
 | mysql | 3306 | MySQL Database (Listener API) |
 | kafka | 9092/29092 | Kafka Message Broker |
@@ -274,7 +274,7 @@ DaprPoc/
 │   └── ElasticsearchUpdater/         # Kafka consumer for ES search indexing (Java 17)
 ├── frontend/                         # React + Vite REST client
 │   └── src/components/search/        # Elasticsearch search UI (simple + advanced query builder)
-├── listenerClient/                   # React + Vite GraphQL subscription client
+├── payrollProClient/                 # React + Vite GraphQL subscription client
 ├── dapr/
 │   ├── components/                   # Dapr component configs (state store, pub/sub)
 │   └── config.yaml

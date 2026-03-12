@@ -9,7 +9,7 @@ export default function App() {
         <div className="app-header">
           <div className="header-content">
             <div className="header-brand">
-              <h1>PayrollPro Live</h1>
+              <h1>payroll pro client</h1>
               <p>Real-time employee and transfer monitoring</p>
             </div>
           </div>

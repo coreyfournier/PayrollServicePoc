@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { RefreshCw, Search, CheckCircle, XCircle, Clock, AlertTriangle, ArrowRight } from 'lucide-react';
-import { getTransferWorkflow, getTransfers } from '../api';
+import { getTransferWorkflow } from '../api';
 import { format } from 'date-fns';
 
 const WORKFLOW_STEPS = [
@@ -128,7 +128,7 @@ function TransferWorkflowPanel() {
       if (wfRes.status === 'rejected' && trRes.status === 'rejected') {
         setError('Transfer not found. Check the ID and try again.');
       }
-    } catch (err) {
+    } catch {
       setError('Failed to load workflow state.');
     } finally {
       setLoading(false);

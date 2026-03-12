@@ -650,12 +650,12 @@ services:
     networks:
       - payroll-network
 
-  # ListenerClient Frontend
-  listener-client:
+  # PayrollPro Client Frontend
+  payrollpro-client:
     build:
-      context: ./listenerClient
+      context: ./payrollProClient
       dockerfile: Dockerfile
-    container_name: listener-client
+    container_name: payrollpro-client
     ports:
       - "3001:80"
     deploy:

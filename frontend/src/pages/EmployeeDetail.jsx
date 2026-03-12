@@ -9,7 +9,7 @@ import {
   clockIn, clockOut, createTaxInfo, updateTaxInfo,
   createDeduction, updateDeduction, deleteDeduction, updateTimeEntry,
   updateEmployee, getTransfers, getBankAccounts, createBankAccount,
-  initiateTransfer, getTransferLimits, acceptTransferBalanceChange,
+  initiateTransfer, acceptTransferBalanceChange,
   getEmployeeTransferLimits, setEmployeeTransferLimits, deleteEmployeeTransferLimits
 } from '../api';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -57,7 +57,6 @@ function EmployeeDetail() {
   const [showBankAccountModal, setShowBankAccountModal] = useState(false);
   const [transferForm, setTransferForm] = useState({ amount: '', bankAccountId: '', payPeriodNumber: '' });
   const [bankAccountForm, setBankAccountForm] = useState({ bankName: '', accountNumberMasked: '', routingNumber: '', accountType: 1 });
-  const [transferLimits, setTransferLimits] = useState(null);
   const [showLimitsModal, setShowLimitsModal] = useState(false);
   const [customLimits, setCustomLimits] = useState(null);
   const [limitsForm, setLimitsForm] = useState({
@@ -82,10 +81,6 @@ function EmployeeDetail() {
     amount: '',
     isPercentage: false,
   });
-
-  useEffect(() => {
-    loadAllData();
-  }, [id]);
 
   const loadAllData = async () => {
     try {
@@ -134,6 +129,10 @@ function EmployeeDetail() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadAllData();
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleClockIn = async () => {
     try {

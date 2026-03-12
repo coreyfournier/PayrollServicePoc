@@ -35,9 +35,9 @@ cd frontend && npm run build                 # Production build
 cd frontend && npm run lint                  # ESLint
 ```
 
-### ListenerClient (GraphQL client)
+### PayrollPro Client (GraphQL client)
 ```bash
-cd listenerClient && npm install && npm run dev
+cd payrollProClient && npm install && npm run dev
 ```
 
 ### Seed data
@@ -54,7 +54,10 @@ The `kafka-init` and `ksqldb-init` services are available standalone under the `
 dotnet test tests/PayrollService.UnitTests/        # 32 payroll domain/application tests
 dotnet test tests/TransferService.UnitTests/        # 18 transfer domain tests
 cd frontend && npm test                             # 63 frontend component/hook tests
+cd frontend && npm run lint                         # ESLint — CI runs this too, must pass
 ```
+
+**Important:** Always run `npm run lint` in addition to `npm test` for the frontend. CI runs both and will fail on lint errors even if all tests pass.
 
 ## Architecture
 
@@ -104,7 +107,7 @@ Controller → MediatR Handler → Entity (raises domain events)
   → DaprStateStoreUnitOfWork.ExecuteAsync()
       1. Dapr State Store Transaction  (entity + outbox — ATOMIC, SOURCE OF TRUTH) → Kafka
       2. MongoDB Collection Write      (read model — BEST-EFFORT, logged on failure)
-  → ListenerApi (Dapr topic subscription) → MySQL → GraphQL subscription → ListenerClient
+  → ListenerApi (Dapr topic subscription) → MySQL → GraphQL subscription → PayrollPro Client
 ```
 
 Repository `AddAsync` methods use `ReplaceOneAsync` with `IsUpsert = true` to be idempotent — retries after a Dapr success don't produce duplicate-key errors in MongoDB.
@@ -125,7 +128,7 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 | transfer-api | 5002 | Swagger at /swagger, transfers & bank accounts |
 | listener-api | 5001 | GraphQL at /graphql |
 | frontend | 3000 | REST client |
-| listener-client | 3001 | GraphQL client |
+| payrollpro-client | 3001 | GraphQL client |
 | kafka | 9092 (internal), 29092 (host) | |
 | kafka-ui | 8089 | Also has ksqlDB query UI |
 | ksqldb-server | 8088 | REST API |
@@ -354,7 +357,7 @@ TransferWorkflow (Durable Task Framework):
                                                     MySQL listener_db.TransferRecords
                                                          │
                                                          ▼
-                                                    GraphQL subscription → ListenerClient
+                                                    GraphQL subscription → PayrollPro Client
 ```
 
 **Two Databases:**
