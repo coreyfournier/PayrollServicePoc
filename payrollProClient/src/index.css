@@ -774,6 +774,42 @@ header {
   cursor: default;
 }
 
+.transfer-amount-options {
+  display: flex;
+  gap: 8px;
+}
+
+.transfer-amount-btn {
+  flex: 1;
+  padding: 10px 16px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.transfer-amount-btn:hover {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.transfer-amount-btn.selected {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.transfer-amount-unavailable {
+  padding: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-style: italic;
+}
+
 .transfer-field input:focus,
 .transfer-field select:focus {
   outline: none;
@@ -854,6 +890,81 @@ header {
 .transfer-status-danger { background: var(--danger-light); color: #991b1b; }
 .transfer-status-warning { background: var(--warning-light); color: #854d0e; }
 .transfer-status-info { background: #e0e7ff; color: #3730a3; }
+
+.transfer-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.transfer-card {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  border-left: 4px solid var(--border);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.transfer-card.transfer-status-success { border-left-color: #059669; }
+.transfer-card.transfer-status-danger { border-left-color: #dc2626; }
+.transfer-card.transfer-status-warning { border-left-color: #d97706; }
+.transfer-card.transfer-status-info { border-left-color: #4f46e5; }
+
+.transfer-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--background);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.transfer-card-amount {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.transfer-card-details {
+  padding: 10px 14px;
+}
+
+.transfer-card-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.transfer-card-label {
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  font-size: 10px;
+}
+
+.transfer-card-failure span:last-child {
+  color: #dc2626;
+  font-weight: 500;
+}
+
+.transfer-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-light);
+  background: var(--background);
+}
+
+.transfer-card-buttons {
+  display: flex;
+  gap: 6px;
+}
 
 .transfer-confirm-actions {
   display: flex;

@@ -15,6 +15,8 @@ export default function TransferPanel({ employee, onClose, onBack }) {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [form, setForm] = useState({ bankAccountId: '' });
+  const [selectedAmount, setSelectedAmount] = useState(null);
+  const presetAmounts = [50, 100, 150].filter(a => a <= netPay);
 
   const [transferResult] = useQuery({
     query: GET_TRANSFERS_BY_EMPLOYEE,
@@ -74,7 +76,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           employeeId: employee.id,
-          amount: netPay,
+          amount: selectedAmount,
           payPeriodNumber: parseInt(payPeriod, 10),
           bankAccountId: form.bankAccountId,
         }),
@@ -86,12 +88,13 @@ export default function TransferPanel({ employee, onClose, onBack }) {
       }
 
       setSuccess('Transfer queued successfully');
+      setSelectedAmount(null);
     } catch (err) {
       setError(err.message);
     } finally {
       setSubmitting(false);
     }
-  }, [employee.id, form, payPeriod]);
+  }, [employee.id, form, payPeriod, selectedAmount]);
 
   const handleAccept = useCallback(async (transferId, accepted) => {
     try {
@@ -156,12 +159,24 @@ export default function TransferPanel({ employee, onClose, onBack }) {
           <div className="transfer-form-fields">
             <div className="transfer-field">
               <label>Amount ($)</label>
-              <input
-                type="text"
-                readOnly
-                value={netPay > 0 ? netPay.toFixed(2) : '0.00'}
-                className="transfer-amount-locked"
-              />
+              {presetAmounts.length > 0 ? (
+                <div className="transfer-amount-options">
+                  {presetAmounts.map(amount => (
+                    <button
+                      key={amount}
+                      type="button"
+                      className={`transfer-amount-btn${selectedAmount === amount ? ' selected' : ''}`}
+                      onClick={() => setSelectedAmount(amount)}
+                    >
+                      ${amount}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="transfer-amount-unavailable">
+                  Net pay too low for transfer
+                </div>
+              )}
             </div>
             <div className="transfer-field">
               <label>Bank Account</label>
@@ -186,7 +201,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={submitting || bankAccounts.length === 0 || !payPeriod || netPay <= 0}
+              disabled={submitting || bankAccounts.length === 0 || !payPeriod || !selectedAmount}
             >
               {submitting ? 'Submitting...' : 'Transfer'}
             </button>
@@ -203,41 +218,59 @@ export default function TransferPanel({ employee, onClose, onBack }) {
             <div className="transfer-empty">No transfers yet</div>
           )}
           {transfers.length > 0 && (
-            <table className="transfer-table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Amount</th>
-                  <th>Period</th>
-                  <th>Status</th>
-                  <th>Reference</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transfers.map(t => (
-                  <tr key={t.id}>
-                    <td className="timestamp">{new Date(t.initiatedAt).toLocaleString()}</td>
-                    <td className="pay-rate">{formatCurrency(t.amount)}</td>
-                    <td>{t.payPeriodNumber}</td>
-                    <td>
-                      <span className={`transfer-status ${statusClass(t.status)}`}>
-                        {statusLabel(t.status)}
-                      </span>
-                      {t.status === 'AwaitingConfirmation' && (
-                        <div className="transfer-confirm-actions">
-                          {t.currentBalance != null && (
-                            <span className="transfer-balance">Balance: {formatCurrency(t.currentBalance)}</span>
-                          )}
-                          <button className="btn btn-sm btn-accept" onClick={() => handleAccept(t.id, true)}>Accept</button>
-                          <button className="btn btn-sm btn-reject" onClick={() => handleAccept(t.id, false)}>Reject</button>
-                        </div>
+            <div className="transfer-cards">
+              {[...transfers]
+                .sort((a, b) => new Date(b.initiatedAt) - new Date(a.initiatedAt))
+                .map(t => (
+                <div key={t.id} className={`transfer-card ${statusClass(t.status)}`}>
+                  <div className="transfer-card-header">
+                    <span className={`transfer-status ${statusClass(t.status)}`}>
+                      {statusLabel(t.status)}
+                    </span>
+                    <span className="transfer-card-amount">{formatCurrency(t.amount)}</span>
+                  </div>
+                  <div className="transfer-card-details">
+                    <div className="transfer-card-row">
+                      <span className="transfer-card-label">Initiated</span>
+                      <span>{new Date(t.initiatedAt).toLocaleString()}</span>
+                    </div>
+                    <div className="transfer-card-row">
+                      <span className="transfer-card-label">Pay Period</span>
+                      <span>{t.payPeriodNumber}</span>
+                    </div>
+                    {t.completedAt && (
+                      <div className="transfer-card-row">
+                        <span className="transfer-card-label">Completed</span>
+                        <span>{new Date(t.completedAt).toLocaleString()}</span>
+                      </div>
+                    )}
+                    {t.externalReferenceId && (
+                      <div className="transfer-card-row">
+                        <span className="transfer-card-label">Reference</span>
+                        <span>{t.externalReferenceId}</span>
+                      </div>
+                    )}
+                    {t.failureReason && (
+                      <div className="transfer-card-row transfer-card-failure">
+                        <span className="transfer-card-label">Reason</span>
+                        <span>{t.failureReason}</span>
+                      </div>
+                    )}
+                  </div>
+                  {t.status === 'AwaitingConfirmation' && (
+                    <div className="transfer-card-actions">
+                      {t.currentBalance != null && (
+                        <span className="transfer-balance">Balance: {formatCurrency(t.currentBalance)}</span>
                       )}
-                    </td>
-                    <td className="timestamp">{t.externalReferenceId || '\u2014'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <div className="transfer-card-buttons">
+                        <button className="btn btn-sm btn-accept" onClick={() => handleAccept(t.id, true)}>Accept</button>
+                        <button className="btn btn-sm btn-reject" onClick={() => handleAccept(t.id, false)}>Reject</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </div>

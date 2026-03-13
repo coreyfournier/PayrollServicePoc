@@ -23,7 +23,8 @@ public class Transfer : Entity
         Guid employeeId,
         decimal amount,
         long payPeriodNumber,
-        Guid bankAccountId)
+        Guid bankAccountId,
+        Guid? transferId = null)
     {
         if (amount <= 0)
             throw new ArgumentException("Transfer amount must be positive.", nameof(amount));
@@ -37,6 +38,9 @@ public class Transfer : Entity
             Status = TransferStatus.Initiated,
             InitiatedAt = DateTime.UtcNow
         };
+
+        if (transferId.HasValue)
+            transfer.Id = transferId.Value;
 
         transfer.AddDomainEvent(new TransferInitiatedEvent(
             transfer.Id, employeeId, amount, payPeriodNumber, bankAccountId));

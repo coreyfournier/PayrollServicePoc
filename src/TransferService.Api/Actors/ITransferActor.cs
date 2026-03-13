@@ -20,13 +20,17 @@ public class TransferActorRequest
     [DataMember]
     public Guid BankAccountId { get; set; }
 
+    [DataMember]
+    public Guid? TransferId { get; set; }
+
     public TransferActorRequest() { }
 
-    public TransferActorRequest(decimal amount, long payPeriodNumber, Guid bankAccountId)
+    public TransferActorRequest(decimal amount, long payPeriodNumber, Guid bankAccountId, Guid? transferId = null)
     {
         Amount = amount;
         PayPeriodNumber = payPeriodNumber;
         BankAccountId = bankAccountId;
+        TransferId = transferId;
     }
 }
 

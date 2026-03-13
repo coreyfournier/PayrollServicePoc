@@ -204,47 +204,77 @@ function Transfers() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: selectedTransfer ? '1fr 1fr' : '1fr', gap: '24px' }}>
-        {/* Transfer List */}
-        <div className="card">
-          <div className="table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Employee</th>
-                  <th>Date</th>
-                  <th>Amount</th>
-                  <th>Status</th>
-                  <th>Period</th>
-                </tr>
-              </thead>
-              <tbody>
-                {transfers.map(t => (
-                  <tr
-                    key={t.id}
-                    className="clickable"
-                    onClick={() => loadWorkflow(t)}
-                    style={selectedTransfer?.id === t.id ? { background: 'var(--surface-hover)' } : undefined}
-                  >
-                    <td><strong>{employeeMap[t.employeeId] || 'Unknown'}</strong></td>
-                    <td style={{ fontSize: '13px' }}>{format(new Date(t.initiatedAt), 'MMM d, h:mm a')}</td>
-                    <td style={{ fontWeight: '600' }}>${t.amount?.toFixed(2)}</td>
-                    <td>{statusBadge(t.status)}</td>
-                    <td style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>#{t.payPeriodNumber}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!loading && transfers.length === 0 && (
+        {/* Transfer List - grouped by employee */}
+        <div>
+          {loading && (
+            <div className="card"><div className="loading"><div className="spinner"></div></div></div>
+          )}
+          {!loading && transfers.length === 0 && (
+            <div className="card">
               <div className="empty-state">
                 <ArrowRightLeft />
                 <h3>No transfers found</h3>
                 <p>Try adjusting your filter or initiate a transfer from an employee's detail page.</p>
               </div>
-            )}
-            {loading && (
-              <div className="loading"><div className="spinner"></div></div>
-            )}
-          </div>
+            </div>
+          )}
+          {!loading && transfers.length > 0 && (() => {
+            const grouped = {};
+            transfers.forEach(t => {
+              const key = t.employeeId;
+              if (!grouped[key]) grouped[key] = [];
+              grouped[key].push(t);
+            });
+            // Sort groups by most recent transfer
+            const sortedGroups = Object.entries(grouped).sort((a, b) => {
+              const latestA = Math.max(...a[1].map(t => new Date(t.initiatedAt).getTime()));
+              const latestB = Math.max(...b[1].map(t => new Date(t.initiatedAt).getTime()));
+              return latestB - latestA;
+            });
+            return sortedGroups.map(([employeeId, empTransfers]) => (
+              <div key={employeeId} className="card" style={{ marginBottom: '16px' }}>
+                <div style={{
+                  padding: '12px 24px', borderBottom: '1px solid var(--border)',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  background: 'var(--background)'
+                }}>
+                  <strong style={{ fontSize: '14px' }}>{employeeMap[employeeId] || 'Unknown'}</strong>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    {empTransfers.length} transfer{empTransfers.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="table-container">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Amount</th>
+                        <th>Status</th>
+                        <th>Period</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {empTransfers
+                        .sort((a, b) => new Date(b.initiatedAt) - new Date(a.initiatedAt))
+                        .map(t => (
+                        <tr
+                          key={t.id}
+                          className="clickable"
+                          onClick={() => loadWorkflow(t)}
+                          style={selectedTransfer?.id === t.id ? { background: 'var(--surface-hover)' } : undefined}
+                        >
+                          <td style={{ fontSize: '13px' }}>{format(new Date(t.initiatedAt), 'MMM d, h:mm a')}</td>
+                          <td style={{ fontWeight: '600' }}>${t.amount?.toFixed(2)}</td>
+                          <td>{statusBadge(t.status)}</td>
+                          <td style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>#{t.payPeriodNumber}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ));
+          })()}
         </div>
 
         {/* Workflow Inspector Panel */}

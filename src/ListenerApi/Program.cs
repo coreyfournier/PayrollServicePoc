@@ -47,6 +47,11 @@ builder.Services.AddScoped<EventProcessor>();
 builder.Services.AddScoped<ITransferRecordRepository, TransferRecordRepository>();
 builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher>();
 
+builder.Services.AddHttpClient("TransferService", client =>
+{
+    client.BaseAddress = new Uri("http://transfer-api:5002");
+});
+
 // GraphQL
 builder.Services
     .AddGraphQLServer()

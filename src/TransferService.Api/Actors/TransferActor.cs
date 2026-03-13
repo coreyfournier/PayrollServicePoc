@@ -1,74 +1,45 @@
 using Dapr.Actors;
 using Dapr.Actors.Runtime;
 using Dapr.Workflow;
-using Microsoft.Extensions.Options;
 using TransferService.Application.Interfaces;
-using TransferService.Application.Options;
 using TransferService.Api.Workflows;
 using TransferService.Domain.Entities;
-using TransferService.Domain.Enums;
 using TransferService.Domain.Repositories;
-using TransferService.Domain.ValueObjects;
 
 namespace TransferService.Api.Actors;
 
 public class TransferActor : Actor, ITransferActor
 {
     private readonly ITransferRepository _transferRepository;
-    private readonly IBankAccountRepository _bankAccountRepository;
-    private readonly IEmployeeTransferLimitsRepository _limitsRepository;
+    private readonly ITransferValidationService _validationService;
     private readonly IUnitOfWork _unitOfWork;
     private readonly DaprWorkflowClient _workflowClient;
-    private readonly TransferLimitsOptions _options;
 
     public TransferActor(
         ActorHost host,
         ITransferRepository transferRepository,
-        IBankAccountRepository bankAccountRepository,
-        IEmployeeTransferLimitsRepository limitsRepository,
+        ITransferValidationService validationService,
         IUnitOfWork unitOfWork,
-        DaprWorkflowClient workflowClient,
-        IOptions<TransferLimitsOptions> options)
+        DaprWorkflowClient workflowClient)
         : base(host)
     {
         _transferRepository = transferRepository;
-        _bankAccountRepository = bankAccountRepository;
-        _limitsRepository = limitsRepository;
+        _validationService = validationService;
         _unitOfWork = unitOfWork;
         _workflowClient = workflowClient;
-        _options = options.Value;
     }
 
     public async Task<TransferActorResult> InitiateTransferAsync(TransferActorRequest request)
     {
         var employeeId = Guid.Parse(Id.GetId());
 
-        var bankAccount = await _bankAccountRepository.GetByIdAsync(request.BankAccountId);
-        if (bankAccount == null || !bankAccount.IsActive)
-            return new TransferActorResult(false, null, "Bank account not found or inactive.");
-
-        if (bankAccount.EmployeeId != employeeId)
-            return new TransferActorResult(false, null, "Bank account does not belong to this employee.");
-
-        var periodTransfers = await _transferRepository.GetByEmployeeAndPayPeriodAsync(employeeId, request.PayPeriodNumber);
-        var activeTransfers = periodTransfers.Where(t => t.Status != TransferStatus.Failed).ToList();
-
-        var currentCount = activeTransfers.Count;
-        var currentAmount = activeTransfers.Sum(t => t.Amount);
-
-        var todayStart = DateTime.UtcNow.Date;
-        var transfersToday = await _transferRepository.GetCountByEmployeeAndDateAsync(employeeId, todayStart);
-
-        var employeeOverride = await _limitsRepository.GetByEmployeeIdAsync(employeeId);
-        var limits = employeeOverride != null
-            ? TransferLimits.FromEmployeeOverride(employeeOverride)
-            : new TransferLimits(_options.MaxPerPayPeriod, _options.MaxAmountPerPayPeriod, _options.MaxPerDay);
-        var validation = limits.Validate(currentCount, currentAmount, request.Amount, transfersToday);
+        var validation = await _validationService.ValidateAsync(
+            new TransferValidationRequest(employeeId, request.Amount, request.PayPeriodNumber, request.BankAccountId));
 
         if (!validation.CanTransfer)
             return new TransferActorResult(false, null, string.Join(" ", validation.Reasons));
 
-        var transfer = Transfer.Create(employeeId, request.Amount, request.PayPeriodNumber, request.BankAccountId);
+        var transfer = Transfer.Create(employeeId, request.Amount, request.PayPeriodNumber, request.BankAccountId, request.TransferId);
 
         await _unitOfWork.ExecuteAsync(
             async () => await _transferRepository.AddAsync(transfer),

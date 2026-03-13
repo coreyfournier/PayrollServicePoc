@@ -15,29 +15,32 @@ public class TransferController : ControllerBase
     private readonly IEmployeeRecordRepository _employeeRepository;
     private readonly ListenerDbContext _dbContext;
     private readonly DaprClient _daprClient;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<TransferController> _logger;
 
     private const string TransferRequestsTopic = "transfer-requests";
+    private static readonly TimeSpan ValidationTimeout = TimeSpan.FromSeconds(3);
 
     public TransferController(
         ITransferRecordRepository transferRepository,
         IEmployeeRecordRepository employeeRepository,
         ListenerDbContext dbContext,
         DaprClient daprClient,
+        IHttpClientFactory httpClientFactory,
         ILogger<TransferController> logger)
     {
         _transferRepository = transferRepository;
         _employeeRepository = employeeRepository;
         _dbContext = dbContext;
         _daprClient = daprClient;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
     /// <summary>
-    /// Initiates a transfer request using the Debezium Outbox Pattern.
-    /// A single MySQL transaction atomically writes the TransferRecord (client read model)
-    /// and an OutboxMessage (command envelope). Debezium CDC tails the MySQL binlog and
-    /// publishes the outbox row to Kafka — no custom publisher needed.
+    /// Initiates a transfer request. First attempts to validate rules against TransferService
+    /// for immediate feedback. If TransferService is unavailable or times out, the command is
+    /// sent via the Debezium outbox and rules are checked when the actor processes it.
     /// </summary>
     [HttpPost]
     public async Task<ActionResult<TransferRecord>> InitiateTransfer([FromBody] InitiateTransferRequest request)
@@ -49,10 +52,12 @@ public class TransferController : ControllerBase
         if (employee == null)
             return NotFound("Employee not found.");
 
-        // Client-side limit pre-check (best-effort from local materialized data)
-        var limitsCheck = await CheckLimitsAsync(request.EmployeeId, request.PayPeriodNumber, request.Amount);
-        if (!limitsCheck.CanTransfer)
-            return BadRequest(new { canTransfer = false, reasons = limitsCheck.Reasons });
+        // Attempt authoritative validation from TransferService (single source of truth for rules).
+        // If TransferService is down or slow, fall through to the outbox path — the actor will
+        // enforce the same rules when it processes the command.
+        var validation = await ValidateWithTransferServiceAsync(request);
+        if (validation is { Responded: true, CanTransfer: false })
+            return BadRequest(new { canTransfer = false, reasons = validation.Reasons });
 
         var transferId = Guid.NewGuid();
         var now = DateTime.UtcNow;
@@ -94,8 +99,8 @@ public class TransferController : ControllerBase
         await transaction.CommitAsync();
 
         _logger.LogInformation(
-            "Transfer {TransferId} queued atomically with outbox message {OutboxId} for employee {EmployeeId}",
-            transferId, outboxMessage.Id, request.EmployeeId);
+            "Transfer {TransferId} queued atomically with outbox message {OutboxId} for employee {EmployeeId} (pre-validated: {PreValidated})",
+            transferId, outboxMessage.Id, request.EmployeeId, validation?.Responded == true);
 
         return Accepted(record);
     }
@@ -165,6 +170,57 @@ public class TransferController : ControllerBase
         return Ok(check);
     }
 
+    private async Task<ValidationResponse> ValidateWithTransferServiceAsync(InitiateTransferRequest request)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(ValidationTimeout);
+            var client = _httpClientFactory.CreateClient("TransferService");
+
+            var payload = JsonSerializer.Serialize(new
+            {
+                request.EmployeeId,
+                request.Amount,
+                request.PayPeriodNumber,
+                request.BankAccountId
+            });
+
+            var response = await client.PostAsync(
+                "/api/transfers/validate",
+                new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
+                cts.Token);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(cts.Token);
+                var result = JsonSerializer.Deserialize<ValidationResponseBody>(body, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+                if (result != null)
+                {
+                    return new ValidationResponse(true, result.CanTransfer, result.Reasons ?? new List<string>());
+                }
+            }
+
+            _logger.LogWarning(
+                "TransferService validation returned {StatusCode} — falling back to outbox path",
+                response.StatusCode);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("TransferService validation timed out after {Timeout}ms — falling back to outbox path",
+                ValidationTimeout.TotalMilliseconds);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "TransferService validation unavailable — falling back to outbox path");
+        }
+
+        return new ValidationResponse(false, true, new List<string>());
+    }
+
     private async Task<TransferLimitsResponse> CheckLimitsAsync(Guid employeeId, long payPeriodNumber, decimal requestedAmount)
     {
         // These match the payroll-api defaults — in production these would be fetched from a shared config
@@ -207,3 +263,6 @@ public record TransferLimitsResponse(
     int TransfersToday,
     bool CanTransfer,
     List<string> Reasons);
+
+record ValidationResponse(bool Responded, bool CanTransfer, List<string> Reasons);
+record ValidationResponseBody(bool CanTransfer, List<string>? Reasons);

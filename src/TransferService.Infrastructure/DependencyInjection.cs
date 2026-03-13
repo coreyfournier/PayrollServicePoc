@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using TransferService.Application.Interfaces;
+using TransferService.Application.Services;
 using TransferService.Domain.Repositories;
 using TransferService.Infrastructure.ExternalServices;
 using TransferService.Infrastructure.Persistence;
@@ -22,6 +23,7 @@ public static class DependencyInjection
         services.AddScoped<IEmployeeTransferLimitsRepository, EmployeeTransferLimitsRepository>();
         services.AddScoped<IUnitOfWork, DaprStateStoreUnitOfWork>();
         services.AddScoped<IBankTransferService, SimulatedBankService>();
+        services.AddScoped<ITransferValidationService, TransferValidationService>();
 
         services.AddHttpClient<IBalanceService, KsqlDbBalanceService>(client =>
         {

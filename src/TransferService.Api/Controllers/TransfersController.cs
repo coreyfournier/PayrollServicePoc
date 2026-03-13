@@ -6,6 +6,7 @@ using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using TransferService.Api.Actors;
 using TransferService.Application.DTOs;
+using TransferService.Application.Interfaces;
 using TransferService.Application.Queries.Transfer;
 
 namespace TransferService.Api.Controllers;
@@ -17,12 +18,30 @@ public class TransfersController : ControllerBase
     private readonly IMediator _mediator;
     private readonly IActorProxyFactory _actorProxyFactory;
     private readonly DaprWorkflowClient _workflowClient;
+    private readonly ITransferValidationService _validationService;
 
-    public TransfersController(IMediator mediator, IActorProxyFactory actorProxyFactory, DaprWorkflowClient workflowClient)
+    public TransfersController(
+        IMediator mediator,
+        IActorProxyFactory actorProxyFactory,
+        DaprWorkflowClient workflowClient,
+        ITransferValidationService validationService)
     {
         _mediator = mediator;
         _actorProxyFactory = actorProxyFactory;
         _workflowClient = workflowClient;
+        _validationService = validationService;
+    }
+
+    [HttpPost("validate")]
+    public async Task<ActionResult<TransferValidationResult>> Validate([FromBody] InitiateTransferDto dto)
+    {
+        var result = await _validationService.ValidateAsync(
+            new TransferValidationRequest(dto.EmployeeId, dto.Amount, dto.PayPeriodNumber, dto.BankAccountId));
+
+        if (!result.CanTransfer)
+            return Ok(result);
+
+        return Ok(result);
     }
 
     [HttpPost]
@@ -178,7 +197,7 @@ public class TransfersController : ControllerBase
         var actor = _actorProxyFactory.CreateActorProxy<ITransferActor>(actorId, "TransferActor");
 
         await actor.InitiateTransferAsync(
-            new TransferActorRequest(request.Amount, request.PayPeriodNumber, request.BankAccountId));
+            new TransferActorRequest(request.Amount, request.PayPeriodNumber, request.BankAccountId, request.TransferId));
 
         return Ok();
     }
@@ -188,7 +207,8 @@ public record TransferRequestEvent(
     Guid EmployeeId,
     decimal Amount,
     long PayPeriodNumber,
-    Guid BankAccountId);
+    Guid BankAccountId,
+    Guid? TransferId = null);
 
 public record AcceptBalanceCommand(
     Guid TransferId,
