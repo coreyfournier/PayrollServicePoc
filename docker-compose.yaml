@@ -430,6 +430,7 @@ services:
     image: "daprio/scheduler:1.16.0"
     container_name: scheduler
     command: ["./scheduler", "--port", "50006", "--etcd-data-dir", "/tmp/scheduler-data"]
+    restart: unless-stopped
     ports:
       - "50007:50006"
     deploy:
@@ -445,6 +446,7 @@ services:
     image: "daprio/placement:1.16.0"
     container_name: placement
     command: ["./placement", "-port", "50006"]
+    restart: unless-stopped
     ports:
       - "50006:50006"
     deploy:

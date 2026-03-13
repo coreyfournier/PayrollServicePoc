@@ -16,6 +16,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
   const [success, setSuccess] = useState(null);
   const [form, setForm] = useState({ bankAccountId: '' });
   const [selectedAmount, setSelectedAmount] = useState(null);
+  const [customAmount, setCustomAmount] = useState('');
   const presetAmounts = [50, 100, 150].filter(a => a <= netPay);
 
   const [transferResult] = useQuery({
@@ -76,7 +77,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           employeeId: employee.id,
-          amount: selectedAmount,
+          amount: customAmount ? parseFloat(customAmount) : selectedAmount,
           payPeriodNumber: parseInt(payPeriod, 10),
           bankAccountId: form.bankAccountId,
         }),
@@ -89,12 +90,13 @@ export default function TransferPanel({ employee, onClose, onBack }) {
 
       setSuccess('Transfer queued successfully');
       setSelectedAmount(null);
+      setCustomAmount('');
     } catch (err) {
       setError(err.message);
     } finally {
       setSubmitting(false);
     }
-  }, [employee.id, form, payPeriod, selectedAmount]);
+  }, [employee.id, form, payPeriod, selectedAmount, customAmount]);
 
   const handleAccept = useCallback(async (transferId, accepted) => {
     try {
@@ -157,51 +159,56 @@ export default function TransferPanel({ employee, onClose, onBack }) {
         {/* New Transfer Form */}
         <form className="transfer-form" onSubmit={handleSubmit}>
           <div className="transfer-form-fields">
-            <div className="transfer-field">
-              <label>Amount ($)</label>
-              {presetAmounts.length > 0 ? (
+            <div className="transfer-amount-row">
+              <div className="transfer-field transfer-field-amount">
+                <label>Amount ($)</label>
                 <div className="transfer-amount-options">
                   {presetAmounts.map(amount => (
                     <button
                       key={amount}
                       type="button"
-                      className={`transfer-amount-btn${selectedAmount === amount ? ' selected' : ''}`}
-                      onClick={() => setSelectedAmount(amount)}
+                      className={`transfer-amount-btn${selectedAmount === amount && !customAmount ? ' selected' : ''}`}
+                      onClick={() => { setSelectedAmount(amount); setCustomAmount(''); }}
                     >
                       ${amount}
                     </button>
                   ))}
                 </div>
-              ) : (
-                <div className="transfer-amount-unavailable">
-                  Net pay too low for transfer
-                </div>
-              )}
-            </div>
-            <div className="transfer-field">
-              <label>Bank Account</label>
-              {loadingAccounts ? (
-                <select disabled><option>Loading...</option></select>
-              ) : bankAccounts.length === 0 ? (
-                <select disabled><option>No accounts</option></select>
-              ) : (
-                <select
-                  required
-                  value={form.bankAccountId}
-                  onChange={(e) => setForm(f => ({ ...f, bankAccountId: e.target.value }))}
-                >
-                  {bankAccounts.map(ba => (
-                    <option key={ba.id} value={ba.id}>
-                      {ba.bankName} - ****{ba.accountNumberMasked}
-                    </option>
-                  ))}
-                </select>
-              )}
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  placeholder="Other amount"
+                  className="transfer-custom-amount"
+                  value={customAmount}
+                  onChange={(e) => { setCustomAmount(e.target.value); setSelectedAmount(null); }}
+                />
+              </div>
+              <div className="transfer-field transfer-field-bank">
+                <label>Bank Account</label>
+                {loadingAccounts ? (
+                  <select disabled><option>Loading...</option></select>
+                ) : bankAccounts.length === 0 ? (
+                  <select disabled><option>No accounts</option></select>
+                ) : (
+                  <select
+                    required
+                    value={form.bankAccountId}
+                    onChange={(e) => setForm(f => ({ ...f, bankAccountId: e.target.value }))}
+                  >
+                    {bankAccounts.map(ba => (
+                      <option key={ba.id} value={ba.id}>
+                        {ba.bankName} - ****{ba.accountNumberMasked}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
             </div>
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={submitting || bankAccounts.length === 0 || !payPeriod || !selectedAmount}
+              disabled={submitting || bankAccounts.length === 0 || !payPeriod || (!selectedAmount && (!customAmount || parseFloat(customAmount) <= 0))}
             >
               {submitting ? 'Submitting...' : 'Transfer'}
             </button>
