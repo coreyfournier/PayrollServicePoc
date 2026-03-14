@@ -481,34 +481,23 @@ log "  David Davis — Chase Bank ****7890 — $BA5_ID"
 
 # ── 3. Create time entries for hourly employees ────────────────────────────
 
-# 4 weeks of Mon-Fri work days (20 days total, spanning 2 pay periods)
-#   Week 1: Jan 19-23  (pay period 55)
-#   Week 2: Jan 26-30  (pay period 55)
-#   Week 3: Feb  2-6   (pay period 56)
-#   Week 4: Feb  9-13  (pay period 56)
-
-WORK_DAYS="
-2026-01-19 08:00 16:30
-2026-01-20 08:15 17:00
-2026-01-21 08:30 16:45
-2026-01-22 08:00 17:15
-2026-01-23 08:45 17:00
-2026-01-26 08:00 16:30
-2026-01-27 08:15 16:45
-2026-01-28 08:30 17:00
-2026-01-29 08:00 17:15
-2026-01-30 08:45 17:30
-2026-02-02 08:00 16:30
-2026-02-03 08:15 17:00
-2026-02-04 08:30 16:45
-2026-02-05 08:00 17:15
-2026-02-06 08:45 17:00
-2026-02-09 08:00 16:30
-2026-02-10 08:15 17:00
-2026-02-11 08:30 16:45
-2026-02-12 08:00 17:15
-2026-02-13 08:45 17:30
-"
+# Generate 20 most recent weekdays (Mon-Fri) relative to today, ensuring
+# time entries always fall in the current and previous pay periods.
+# Each day gets a varied clock-in/clock-out time for realism.
+WORK_DAYS=$(python3 -c "
+from datetime import datetime, timedelta, timezone
+d = datetime.now(timezone.utc).date() - timedelta(days=1)  # start from yesterday
+times = [('08:00','16:30'),('08:15','17:00'),('08:30','16:45'),('08:00','17:15'),('08:45','17:30')]
+days = []
+while len(days) < 20:
+    if d.weekday() < 5:  # Mon-Fri
+        cin, cout = times[len(days) % 5]
+        days.append(f'{d.isoformat()} {cin} {cout}')
+    d -= timedelta(days=1)
+days.reverse()  # chronological order
+print('\n'.join(days))
+")
+log "  Generated work days: $(echo "$WORK_DAYS" | head -1) through $(echo "$WORK_DAYS" | tail -1)"
 
 create_time_entries() {
   emp_id="$1"
@@ -664,10 +653,20 @@ log "  Michael Williams — Health (\$250), Vision (\$25), 401k (10%)"
 
 log "Initiating transfers via Listener API..."
 
+# Compute current pay period number (bi-weekly from 2024-01-01 epoch)
+CURRENT_PAY_PERIOD=$(python3 -c "
+from datetime import datetime, timezone
+epoch_ms = 1704067200000  # 2024-01-01T00:00:00Z
+period_ms = 14 * 24 * 60 * 60 * 1000  # 14 days
+now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+print(int((now_ms - epoch_ms) // period_ms))
+")
+log "  Current pay period: $CURRENT_PAY_PERIOD"
+
 # Wait for employees to be materialized in listener-api MySQL
-# (employee-events must propagate through Dapr → Kafka → listener-api subscription)
+# (employee-events must propagate through Kafka → listener-api consumer)
 log "  Waiting for employees to appear in Listener API..."
-until curl -sf "$LISTENER/api/Transfer/employee/$EMP2_ID/limits?payPeriodNumber=56" > /dev/null 2>&1; do
+until curl -sf "$LISTENER/api/Transfer/employee/$EMP2_ID/limits?payPeriodNumber=$CURRENT_PAY_PERIOD" > /dev/null 2>&1; do
   sleep 3
 done
 log "  Employees materialized in Listener API."
@@ -675,18 +674,18 @@ log "  Employees materialized in Listener API."
 api_post "$LISTENER/api/Transfer" -d "{
   \"employeeId\": \"$EMP2_ID\",
   \"amount\": 100.00,
-  \"payPeriodNumber\": 56,
+  \"payPeriodNumber\": $CURRENT_PAY_PERIOD,
   \"bankAccountId\": \"$BA2_ID\"
 }" > /dev/null
-log "  Sarah Johnson — \$100 transfer (period 56)"
+log "  Sarah Johnson — \$100 transfer (period $CURRENT_PAY_PERIOD)"
 
 api_post "$LISTENER/api/Transfer" -d "{
   \"employeeId\": \"$EMP4_ID\",
   \"amount\": 150.00,
-  \"payPeriodNumber\": 56,
+  \"payPeriodNumber\": $CURRENT_PAY_PERIOD,
   \"bankAccountId\": \"$BA4_ID\"
 }" > /dev/null
-log "  Emily Brown — \$150 transfer (period 56)"
+log "  Emily Brown — \$150 transfer (period $CURRENT_PAY_PERIOD)"
 
 # ── 7. Verify Elasticsearch ──────────────────────────────────────────────
 
