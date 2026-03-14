@@ -67,6 +67,7 @@ builder.Services.AddMassTransit(x =>
             // employee-events: CloudEvent-wrapped JSON from PayrollService's outbox
             k.TopicEndpoint<Ignore, EmployeeEventMessage>("employee-events", "listener-api-group", e =>
             {
+                e.AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest;
                 e.SetValueDeserializer(new RawStringDeserializer<EmployeeEventMessage>(
                     (msg, val) => msg.Value = val));
                 e.ConfigureConsumer<EmployeeEventConsumer>(context);
@@ -75,6 +76,7 @@ builder.Services.AddMassTransit(x =>
             // transfer-events: CloudEvent-wrapped JSON from TransferService's outbox
             k.TopicEndpoint<Ignore, TransferEventMessage>("transfer-events", "listener-api-group", e =>
             {
+                e.AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest;
                 e.SetValueDeserializer(new RawStringDeserializer<TransferEventMessage>(
                     (msg, val) => msg.Value = val));
                 e.ConfigureConsumer<TransferEventConsumer>(context);
@@ -83,6 +85,7 @@ builder.Services.AddMassTransit(x =>
             // employee-net-pay: raw JSON from Java NetPayProcessor (may also be CloudEvent-wrapped)
             k.TopicEndpoint<Ignore, NetPayEventMessage>("employee-net-pay", "listener-api-group", e =>
             {
+                e.AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest;
                 e.SetValueDeserializer(new RawStringDeserializer<NetPayEventMessage>(
                     (msg, val) => msg.Value = val));
                 e.ConfigureConsumer<NetPayEventConsumer>(context);

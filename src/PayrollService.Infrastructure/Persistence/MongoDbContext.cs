@@ -58,6 +58,9 @@ public class MongoDbContext
             RegisterClassMap<EmployeeClockedOutEvent>();
             RegisterClassMap<TimeEntryUpdatedEvent>();
 
+            // Register GuidSerializer with Standard representation so LINQ filters work
+            BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
+
             // Configure ObjectSerializer to allow all types (needed for 'object' typed properties)
             var objectSerializer = new ObjectSerializer(type => ObjectSerializer.AllAllowedTypes(type));
             BsonSerializer.RegisterSerializer(objectSerializer);

@@ -48,6 +48,9 @@ public class TransferMongoDbContext
             RegisterClassMap<BankAccountUpdatedEvent>();
             RegisterClassMap<BankAccountDeactivatedEvent>();
 
+            // Register GuidSerializer with Standard representation so LINQ filters work
+            BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
+
             var objectSerializer = new ObjectSerializer(type => ObjectSerializer.AllAllowedTypes(type));
             BsonSerializer.RegisterSerializer(objectSerializer);
 

@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using MassTransit;
+using Confluent.Kafka;
 using Microsoft.Extensions.Logging;
 using TransferService.Application.Interfaces;
 using TransferService.Domain.Entities;
@@ -9,21 +9,21 @@ namespace TransferService.Infrastructure.Messaging;
 
 public class TransferEventPublisher : ITransferEventPublisher
 {
-    private readonly ITopicProducer<string, string> _topicProducer;
+    private readonly IProducer<string, string> _producer;
     private readonly ILogger<TransferEventPublisher> _logger;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNamingPolicy = null, // PascalCase to match Dapr's format
+        PropertyNamingPolicy = null, // PascalCase to match existing format
         Converters = { new JsonStringEnumConverter() },
         DefaultIgnoreCondition = JsonIgnoreCondition.Never
     };
 
     public TransferEventPublisher(
-        ITopicProducer<string, string> topicProducer,
+        IProducer<string, string> producer,
         ILogger<TransferEventPublisher> logger)
     {
-        _topicProducer = topicProducer;
+        _producer = producer;
         _logger = logger;
     }
 
@@ -31,15 +31,21 @@ public class TransferEventPublisher : ITransferEventPublisher
     {
         try
         {
-            var entityJson = JsonSerializer.Serialize(transfer, JsonOptions);
-            var cloudEvent = CloudEventWrapper.Create(entityJson);
-            var message = JsonSerializer.Serialize(cloudEvent, JsonOptions);
+            var entityJsonElement = JsonSerializer.SerializeToElement(transfer, JsonOptions);
+            var cloudEvent = CloudEventWrapper.Create(entityJsonElement);
+            var messageValue = JsonSerializer.Serialize(cloudEvent, JsonOptions);
 
-            await _topicProducer.Produce(transfer.Id.ToString(), message, cancellationToken);
+            var message = new Message<string, string>
+            {
+                Key = transfer.Id.ToString(),
+                Value = messageValue
+            };
+
+            var result = await _producer.ProduceAsync("transfer-events", message, cancellationToken);
 
             _logger.LogInformation(
-                "Published transfer event for {TransferId} with status {Status}",
-                transfer.Id, transfer.Status);
+                "Published transfer event for {TransferId} with status {Status} to partition {Partition}",
+                transfer.Id, transfer.Status, result.Partition.Value);
         }
         catch (Exception ex)
         {

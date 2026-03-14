@@ -1,9 +1,11 @@
 using MassTransit;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace TransferService.Api.Sagas;
 
 public class TransferState : SagaStateMachineInstance, ISagaVersion
 {
+    [BsonId]
     public Guid CorrelationId { get; set; } // = TransferId
     public string CurrentState { get; set; } = default!;
     public int Version { get; set; }
@@ -17,4 +19,8 @@ public class TransferState : SagaStateMachineInstance, ISagaVersion
     public string? FailureReason { get; set; }
     public int RetryCount { get; set; }
     public Guid? ConfirmationTimeoutTokenId { get; set; }
+
+    // Transient flags for inline branching (not persisted meaningfully)
+    public bool ValidationFailed { get; set; }
+    public bool BalanceInsufficient { get; set; }
 }
