@@ -126,23 +126,19 @@ Consumers parse CloudEvent JSON envelopes for backward compatibility with the ks
 
 ### Kafka Topics
 
-`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `payperiod-hours-changed`, `employee-gross-pay`, `employee-net-pay`, `employee-search`, `employee-info` — created by the seed script (topic creation runs before ksqlDB initialization). Additional internal topics (`TIME_ENTRY_EVENTS`, `GROSS_PAY_EVENTS`, `employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must be pre-created with 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs; the seed script ensures this ordering.
+`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `employee-net-pay`, `employee-search`, `employee-info` — created by the seed script (topic creation runs before ksqlDB initialization). Additional internal topics (`employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must be pre-created with 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs; the seed script ensures this ordering.
 
 ### ksqlDB Stream Processing
 
-ksqlDB processes the `employee-events` Kafka topic to produce per-employee, per-pay-period hour aggregates on the `payperiod-hours-changed` topic. Defined in `ksqldb/statements.sql`, executed by the seed script on startup (after topic creation).
+ksqlDB processes the `employee-events` Kafka topic to produce the `employee-info` compacted topic (latest employee state per ID) for the ElasticsearchUpdater, and materializes the `employee-net-pay` topic as a SOURCE TABLE for pull queries. Defined in `ksqldb/statements.sql`, executed by the seed script on startup (after topic creation).
 
-**Pipeline (9 objects):**
+**Pipeline (4 objects):**
 
 ```
 employee-events topic
-  → EMPLOYEE_EVENTS_RAW stream (raw CloudEvent envelope, data as VARCHAR)
-  ├→ EMPLOYEE_INFO_EVENTS stream (filtered for employee.* events)
-  │   → EMPLOYEE_INFO table (latest employee state per ID → employee-info topic)
-  ├→ TIME_ENTRY_EVENTS stream (filtered for timeentry.clockedout / timeentry.updated)
-  │   → EMPLOYEE_HOURS_BY_PERIOD table (aggregated per employee + pay period → payperiod-hours-changed topic)
-  └→ GROSS_PAY_EVENTS stream (employee + timeentry events, normalized fields)
-      → EMPLOYEE_GROSS_PAY_BY_PERIOD table (rate × hours per employee + pay period → employee-gross-pay topic)
+  → EMPLOYEE_EVENTS_RAW stream (raw CloudEvent envelope, data as STRUCT)
+  └→ EMPLOYEE_INFO_EVENTS stream (filtered for employee.* events)
+      → EMPLOYEE_INFO table (latest employee state per ID → employee-info topic)
 
 employee-net-pay topic (produced by NetPayProcessor)
   → EMPLOYEE_NET_PAY_BY_PERIOD source table (keyed by EMPLOYEE_ID + PAY_PERIOD_NUMBER)
@@ -150,28 +146,8 @@ employee-net-pay topic (produced by NetPayProcessor)
 
 **Key design decisions:**
 
-- **`data` is VARCHAR, not STRUCT** — The CloudEvent wrapper stringifies the JSON payload for compatibility. Fields are extracted via `EXTRACTJSONFIELD(data, '$.FieldName')` with PascalCase entity field names (`$.Id`, `$.EmployeeId`, `$.ClockIn`, `$.ClockOut`, `$.HoursWorked`, `$.PayPeriodHours`).
-- **Event type filtering** — The top-level CloudEvent `type` is always `com.dapr.event.sent`. The actual event type is extracted from `$.DomainEvents[0].EventType` inside the stringified data.
-- **Edit-safe aggregation** — `AS_MAP(COLLECT_LIST(TIME_ENTRY_ID), COLLECT_LIST(HOURS_WORKED))` deduplicates by time entry ID (last value wins for duplicate keys), then `REDUCE(MAP_VALUES(...))` sums the latest hours per entry. This prevents double-counting when time entries are edited.
+- **Event type filtering** — The top-level CloudEvent `type` is always `com.dapr.event.sent`. The actual event type is extracted from `data->DomainEvents[1]->EventType` (ksqlDB arrays are 1-indexed).
 - **Pay period math** — Bi-weekly periods starting from epoch 2024-01-01T00:00:00Z (1704067200000 ms), each 14 days (1209600000 ms).
-
-**`payperiod-hours-changed` topic schema:**
-
-- Key (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55}`
-- Value (JSON): `{"TOTAL_HOURS_WORKED": 12.0, "EVENT_COUNT": 4, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00"}`
-
-**`employee-gross-pay` topic schema:**
-
-- Key (JSON): `{"EMPLOYEE_ID": "...", "PAY_PERIOD_NUMBER": 55}`
-- Value (JSON): `{"PAY_RATE": 28.5, "PAY_TYPE": "1", "PAY_PERIOD_HOURS": 40.0, "EFFECTIVE_HOURLY_RATE": 28.5, "TOTAL_HOURS_WORKED": 12.0, "GROSS_PAY": 342.0, "PAY_PERIOD_START": "2026-02-09T00:00:00", "PAY_PERIOD_END": "2026-02-23T00:00:00", "EVENT_COUNT": 5}`
-
-**Gross pay design decisions:**
-
-- **Single-stream approach** — Both employee events (with `PayRate`) and time entry events (with `HoursWorked`) flow through the same `employee-events` topic. `GROSS_PAY_EVENTS` captures both, normalizing `EMPLOYEE_ID` via `COALESCE($.EmployeeId, $.Id)`.
-- **Pay rate tracking** — `LATEST_BY_OFFSET(PAY_RATE, true)` ignores nulls from time entry events, keeping the most recent rate from employee events. The `__PAY_RATE__` sentinel for `TIME_ENTRY_ID` contributes 0 hours to the AS_MAP dedup.
-- **Salary vs Hourly** — `PayType=1` (Hourly): rate is $/hour. `PayType=2` (Salary): rate is $/year, divided by 2080 (52 weeks x 40 hours) to get the effective hourly rate.
-- **PayPeriodHours for salaried employees** — Salaried employees don't clock in/out. The `PayPeriodHours` field on the Employee entity (default 40) specifies how many hours per pay period a salaried employee works. The ksqlDB pipeline uses `LATEST_BY_OFFSET(PAY_PERIOD_HOURS, true)` for `TOTAL_HOURS_WORKED` when `PAY_TYPE = '2'`, instead of summing time entries. Hourly employees still use the AS_MAP+REDUCE dedup pattern.
-- **Current period only** — Pay rate changes are assigned to the current pay period (via `$.UpdatedAt`), so only that period's `GROSS_PAY` updates. Past periods retain their existing values.
 
 **Init behavior:** The seed script (and standalone `ksqldb-init` if run via `--profile init`) terminates all running queries before executing DROP/CREATE statements, making it safe for re-runs.
 
@@ -182,25 +158,32 @@ employee-net-pay topic (produced by NetPayProcessor)
 
 ### Net Pay Processor (Kafka Streams, Java 17)
 
-Standalone Kafka Streams application (`src/NetPayProcessor/`) that computes per-employee, per-pay-period net pay by combining gross pay with tax configuration and deductions. Connects directly to Kafka.
+Standalone Kafka Streams application (`src/NetPayProcessor/`) that computes per-employee, per-pay-period gross pay and net pay from a single `employee-events` topic. Handles employee info (pay rate), time entries (hours), tax configuration, and deductions. Connects directly to Kafka.
 
 **Pipeline:**
 
 ```
-employee-gross-pay topic ──┐
-                           ├──→ Kafka Streams App ──→ employee-net-pay topic
-employee-events topic ─────┘    (net-pay-processor)
-  (taxinfo.*, deduction.*)
+employee-events topic ──→ Kafka Streams App ──→ employee-net-pay topic
+  (employee.*, timeentry.*,   (net-pay-processor)
+   taxinfo.*, deduction.*)
 ```
 
-**Internal topology** (Processor API with state stores):
-- `gross-pay-store` — keyed by `employeeId:payPeriod`, latest gross pay from ksqlDB
-- `tax-config-store` — keyed by `employeeId`, latest tax config (filing status, state, additional withholding)
-- `deduction-store` — keyed by `employeeId`, map of `deductionId → {amount, isPercentage, isActive}`
+**Internal topology** (Processor API with in-memory state):
+- `employeeInfoStore` — keyed by `employeeId` → {payRate, payType, payPeriodHours}
+- `hoursStore` — keyed by `employeeId:payPeriod` → Map<timeEntryId, hoursWorked> (O(1) upserts)
+- `taxConfigStore` — keyed by `employeeId` → tax config (filing status, state, additional withholding)
+- `deductionStore` — keyed by `employeeId` → map of `deductionId → {amount, isPercentage, isActive}`
 
-When a **gross pay event** arrives: update store → look up tax & deductions → compute net pay → emit.
-When a **tax info event** arrives: update store → look up latest gross pay for current period → recompute → emit.
-When a **deduction event** arrives: update store → look up latest gross pay for current period → recompute → emit.
+**Gross pay computation** (previously in ksqlDB, moved for O(1) performance):
+- **Hourly** (`PayType=1`): `payRate × sum(hoursStore values)` — each time entry upsert is O(1) into the map, sum is O(unique entries)
+- **Salary** (`PayType=2`): `(payRate / 2080) × payPeriodHours` — no time entry tracking needed
+- **Edit-safe**: time entry edits overwrite the existing map entry by ID, not append — no unbounded list growth
+- **Current period only** — Pay rate changes are assigned to the pay period derived from `UpdatedAt`
+
+When an **employee event** arrives: update employeeInfoStore → compute gross pay → compute net pay → emit.
+When a **time entry event** arrives: upsert into hoursStore → compute gross pay → compute net pay → emit.
+When a **tax info event** arrives: update taxConfigStore → recompute net pay for current period → emit.
+When a **deduction event** arrives: update deductionStore → recompute net pay for current period → emit.
 
 **Tax calculation:**
 - **Federal**: Progressive brackets (2024 rates) — annualizes bi-weekly gross x 26, applies brackets, divides by 26. Single/HeadOfHousehold use single brackets; Married uses married brackets.
@@ -403,6 +386,4 @@ TransferStateMachine (MassTransit Saga):
 
 ## Known Issues
 
-- The CloudEvent format preserves the stringified `data` payload for backward compatibility with the ksqlDB pipeline. The ksqlDB streams declare `data` as VARCHAR and use `EXTRACTJSONFIELD` to extract fields.
-- The `COLLECT_LIST` in the ksqlDB aggregation grows unboundedly (appends every event). Acceptable for a POC but would need a retention strategy in production.
 - Re-running ksqlDB initialization (via seed or `--profile init`) drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover: they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. No manual intervention needed.

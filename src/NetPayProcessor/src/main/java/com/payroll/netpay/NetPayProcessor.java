@@ -3,7 +3,7 @@ package com.payroll.netpay;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.payroll.netpay.model.DeductionMap;
-import com.payroll.netpay.model.GrossPay;
+import com.payroll.netpay.model.EmployeeInfo;
 import com.payroll.netpay.model.NetPayResult;
 import com.payroll.netpay.model.TaxConfig;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -12,6 +12,10 @@ import org.apache.kafka.streams.processor.api.Record;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,14 +23,19 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Unified processor that handles both gross-pay and employee-events sources.
+ * Unified processor that computes gross pay and net pay from employee-events.
  *
- * State is kept in static ConcurrentHashMaps shared across all processor instances
- * rather than Kafka Streams partitioned state stores. This avoids the co-partitioning
- * problem: employee-gross-pay and employee-events have different key schemas, so the
- * same employee's data lands in different partitions/tasks, making per-task state stores
- * invisible across sources. Shared in-memory maps ensure all processors see the same
- * state regardless of partition assignment. Safe for this single-instance, single-thread POC.
+ * Gross pay aggregation (previously in ksqlDB) is now done here with O(1) upserts
+ * into in-memory maps, replacing the unbounded COLLECT_LIST + AS_MAP + REDUCE pattern.
+ *
+ * State stores:
+ * - employeeInfoStore: keyed by employeeId → {payRate, payType, payPeriodHours}
+ * - hoursStore: keyed by employeeId:payPeriod → Map<timeEntryId, hoursWorked>
+ * - taxConfigStore: keyed by employeeId → tax config
+ * - deductionStore: keyed by employeeId → deduction map
+ *
+ * All stores are static ConcurrentHashMaps shared across processor instances.
+ * Safe for this single-instance, single-thread POC.
  */
 public class NetPayProcessor implements Processor<String, String, String, String> {
 
@@ -34,28 +43,20 @@ public class NetPayProcessor implements Processor<String, String, String, String
     private static final ObjectMapper mapper = new ObjectMapper();
 
     // Pay period epoch: 2024-01-01T00:00:00Z in millis
-    private static final long PAY_PERIOD_EPOCH_MS = 1704067200000L;
-    private static final long PAY_PERIOD_DURATION_MS = 14L * 24 * 60 * 60 * 1000; // 14 days
+    static final long PAY_PERIOD_EPOCH_MS = 1704067200000L;
+    static final long PAY_PERIOD_DURATION_MS = 14L * 24 * 60 * 60 * 1000; // 14 days
 
-    // Shared in-memory state — keyed by employeeId:payPeriod for gross pay, employeeId for others
-    static final ConcurrentHashMap<String, String> grossPayStore = new ConcurrentHashMap<>();
+    private static final DateTimeFormatter PAY_PERIOD_FMT =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+
+    // Shared in-memory state
+    static final ConcurrentHashMap<String, String> employeeInfoStore = new ConcurrentHashMap<>();
+    static final ConcurrentHashMap<String, ConcurrentHashMap<String, Double>> hoursStore = new ConcurrentHashMap<>();
     static final ConcurrentHashMap<String, String> taxConfigStore = new ConcurrentHashMap<>();
     static final ConcurrentHashMap<String, String> deductionStore = new ConcurrentHashMap<>();
-    // Tracks deactivated employees so late-arriving gross pay events emit tombstones instead of data.
-    // Handles the replay race condition where employee-gross-pay events arrive after the deactivation.
-    // Cleared when an employee.created event re-uses the same ID (won't happen with GUIDs, but safe).
     static final Set<String> deactivatedEmployees = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    private final String sourceName;
     private ProcessorContext<String, String> context;
-
-    /**
-     * @param sourceName identifies which source topic this processor instance handles:
-     *                   "gross-pay" or "employee-events"
-     */
-    public NetPayProcessor(String sourceName) {
-        this.sourceName = sourceName;
-    }
 
     @Override
     public void init(ProcessorContext<String, String> context) {
@@ -67,103 +68,96 @@ public class NetPayProcessor implements Processor<String, String, String, String
         if (record.value() == null) return;
 
         try {
-            if ("gross-pay".equals(sourceName)) {
-                handleGrossPay(record);
-            } else {
-                handleEmployeeEvent(record);
+            JsonNode envelope = mapper.readTree(record.value());
+            JsonNode data = envelope.path("data");
+            if (data.isMissingNode() || data.isNull()) return;
+
+            JsonNode domainEvents = data.path("DomainEvents");
+            if (!domainEvents.isArray() || domainEvents.isEmpty()) return;
+            String eventType = domainEvents.get(0).path("EventType").asText("");
+
+            switch (eventType) {
+                case "employee.created":
+                case "employee.updated":
+                    handleEmployeeCreatedOrUpdated(data);
+                    break;
+                case "employee.deactivated":
+                    handleEmployeeDeactivated(data);
+                    break;
+                case "timeentry.clockedout":
+                case "timeentry.updated":
+                    handleTimeEntryEvent(data);
+                    break;
+                default:
+                    if (eventType.startsWith("taxinfo.")) {
+                        handleTaxInfoEvent(data);
+                    } else if (eventType.startsWith("deduction.")) {
+                        handleDeductionEvent(data, eventType);
+                    }
+                    break;
             }
         } catch (Exception e) {
-            log.error("Error processing record from {}: {}", sourceName, e.getMessage(), e);
+            log.error("Error processing record: {}", e.getMessage(), e);
         }
     }
 
-    private void handleGrossPay(Record<String, String> record) throws Exception {
-        JsonNode keyNode = mapper.readTree(record.key());
-        JsonNode valueNode = mapper.readTree(record.value());
+    private void handleEmployeeCreatedOrUpdated(JsonNode data) throws Exception {
+        String employeeId = data.path("Id").asText(null);
+        if (employeeId == null) return;
 
-        String employeeId = keyNode.get("EMPLOYEE_ID").asText();
-        long payPeriodNumber = keyNode.get("PAY_PERIOD_NUMBER").asLong();
+        double payRate = data.path("PayRate").asDouble(0);
+        String payType = String.valueOf(data.path("PayType").asInt(1));
+        double payPeriodHours = data.path("PayPeriodHours").asDouble(40);
 
-        // If this employee was deactivated, emit a tombstone instead of net pay
-        if (deactivatedEmployees.contains(employeeId)) {
-            String outputKey = mapper.writeValueAsString(
-                mapper.createObjectNode()
-                    .put("EMPLOYEE_ID", employeeId)
-                    .put("PAY_PERIOD_NUMBER", payPeriodNumber)
-            );
-            context.forward(new Record<>(outputKey, null, System.currentTimeMillis()));
-            log.info("Gross pay skipped (deactivated): employee={}, period={}, tombstone emitted", employeeId, payPeriodNumber);
-            return;
+        EmployeeInfo info = new EmployeeInfo(employeeId, payRate, payType, payPeriodHours);
+        employeeInfoStore.put(employeeId, mapper.writeValueAsString(info));
+
+        // Compute gross+net pay for the pay period derived from UpdatedAt
+        String updatedAt = data.path("UpdatedAt").asText(null);
+        if (updatedAt == null) updatedAt = data.path("CreatedAt").asText(null);
+        if (updatedAt != null) {
+            long payPeriod = computePayPeriodFromTimestamp(updatedAt);
+            log.info("Employee info updated: employee={}, payRate={}, payType={}, payPeriodHours={}, period={}",
+                employeeId, payRate, payType, payPeriodHours, payPeriod);
+            computeAndEmit(employeeId, payPeriod);
         }
-
-        GrossPay gp = new GrossPay();
-        gp.setEmployeeId(employeeId);
-        gp.setPayPeriodNumber(payPeriodNumber);
-        gp.setPayRate(valueNode.path("PAY_RATE").asDouble(0));
-        gp.setPayType(valueNode.path("PAY_TYPE").asText("1"));
-        gp.setGrossPay(valueNode.path("GROSS_PAY").asDouble(0));
-        gp.setTotalHoursWorked(valueNode.path("TOTAL_HOURS_WORKED").asDouble(0));
-        gp.setPayPeriodStart(valueNode.path("PAY_PERIOD_START").asText(""));
-        gp.setPayPeriodEnd(valueNode.path("PAY_PERIOD_END").asText(""));
-
-        String storeKey = employeeId + ":" + payPeriodNumber;
-        grossPayStore.put(storeKey, mapper.writeValueAsString(gp));
-
-        log.info("Gross pay updated: employee={}, period={}, gross={}", employeeId, payPeriodNumber, gp.getGrossPay());
-        computeAndEmit(employeeId, payPeriodNumber);
     }
 
-    private void handleEmployeeEvent(Record<String, String> record) throws Exception {
-        JsonNode envelope = mapper.readTree(record.value());
+    private void handleTimeEntryEvent(JsonNode data) throws Exception {
+        String employeeId = data.path("EmployeeId").asText(null);
+        String timeEntryId = data.path("Id").asText(null);
+        if (employeeId == null || timeEntryId == null) return;
 
-        // Dapr CloudEvent: data is a stringified JSON
-        String dataStr = envelope.path("data").asText(null);
-        if (dataStr == null) {
-            // data might be an object (non-Dapr path)
-            JsonNode dataNode = envelope.path("data");
-            if (dataNode.isMissingNode() || dataNode.isNull()) return;
-            dataStr = dataNode.toString();
-        }
+        double hoursWorked = data.path("HoursWorked").asDouble(0);
+        String clockIn = data.path("ClockIn").asText(null);
+        if (clockIn == null) return;
 
-        JsonNode data = mapper.readTree(dataStr);
+        long payPeriod = computePayPeriodFromTimestamp(clockIn);
+        String storeKey = employeeId + ":" + payPeriod;
 
-        // Extract event type from DomainEvents[0].EventType
-        JsonNode domainEvents = data.path("DomainEvents");
-        if (!domainEvents.isArray() || domainEvents.isEmpty()) return;
-        String eventType = domainEvents.get(0).path("EventType").asText("");
+        // O(1) upsert — replaces the ksqlDB COLLECT_LIST + AS_MAP + REDUCE pattern
+        hoursStore.computeIfAbsent(storeKey, k -> new ConcurrentHashMap<>())
+            .put(timeEntryId, hoursWorked);
 
-        if ("employee.created".equals(eventType)) {
-            // No-op here. The pre-scan already built the correct deactivated set from
-            // the full event history. Removing from the set during topology replay would
-            // undo the pre-scan's work (old employee.created events arrive before their
-            // deactivation events due to cross-partition ordering). New employees use
-            // fresh GUIDs and are never in the deactivated set, so no removal needed.
-        } else if ("employee.deactivated".equals(eventType)) {
-            handleEmployeeDeactivated(data);
-        } else if (eventType.startsWith("taxinfo.")) {
-            handleTaxInfoEvent(data);
-        } else if (eventType.startsWith("deduction.")) {
-            handleDeductionEvent(data, eventType);
-        }
-        // employee.created/updated and timeentry.* are handled by gross pay
+        log.info("Time entry updated: employee={}, timeEntry={}, hours={}, period={}",
+            employeeId, timeEntryId, hoursWorked, payPeriod);
+        computeAndEmit(employeeId, payPeriod);
     }
 
     private void handleEmployeeDeactivated(JsonNode data) throws Exception {
         String employeeId = data.path("Id").asText(null);
         if (employeeId == null) return;
 
-        // Mark as deactivated so late-arriving gross pay events also emit tombstones
         deactivatedEmployees.add(employeeId);
 
-        // Find all pay periods for this employee in the gross pay store
+        // Find all pay periods for this employee and emit tombstones
         List<String> keysToRemove = new ArrayList<>();
-        for (String key : grossPayStore.keySet()) {
+        for (String key : hoursStore.keySet()) {
             if (key.startsWith(employeeId + ":")) {
                 keysToRemove.add(key);
             }
         }
 
-        // Emit tombstones (null value) for each pay period — removes rows from ksqlDB tables
         for (String key : keysToRemove) {
             long payPeriodNumber = Long.parseLong(key.substring(key.indexOf(':') + 1));
             String outputKey = mapper.writeValueAsString(
@@ -172,15 +166,27 @@ public class NetPayProcessor implements Processor<String, String, String, String
                     .put("PAY_PERIOD_NUMBER", payPeriodNumber)
             );
             context.forward(new Record<>(outputKey, null, System.currentTimeMillis()));
-            grossPayStore.remove(key);
+            hoursStore.remove(key);
         }
 
-        // Clean up other stores
+        // Also check for salaried employees with no time entries but with employee info
+        // (they may have had a computed gross pay from payPeriodHours)
+        if (keysToRemove.isEmpty()) {
+            long currentPeriod = getCurrentPayPeriod();
+            String outputKey = mapper.writeValueAsString(
+                mapper.createObjectNode()
+                    .put("EMPLOYEE_ID", employeeId)
+                    .put("PAY_PERIOD_NUMBER", currentPeriod)
+            );
+            context.forward(new Record<>(outputKey, null, System.currentTimeMillis()));
+        }
+
+        employeeInfoStore.remove(employeeId);
         taxConfigStore.remove(employeeId);
         deductionStore.remove(employeeId);
 
         log.info("Employee deactivated: employee={}, tombstones emitted for {} pay periods",
-            employeeId, keysToRemove.size());
+            employeeId, Math.max(keysToRemove.size(), 1));
     }
 
     private void handleTaxInfoEvent(JsonNode data) throws Exception {
@@ -198,12 +204,7 @@ public class NetPayProcessor implements Processor<String, String, String, String
         taxConfigStore.put(employeeId, mapper.writeValueAsString(tc));
         log.info("Tax config updated: employee={}, filing={}, state={}", employeeId, tc.getFederalFilingStatus(), tc.getState());
 
-        // Recompute for current pay period
-        long currentPeriod = getCurrentPayPeriod();
-        String storeKey = employeeId + ":" + currentPeriod;
-        if (grossPayStore.containsKey(storeKey)) {
-            computeAndEmit(employeeId, currentPeriod);
-        }
+        recomputeCurrentPeriod(employeeId);
     }
 
     private void handleDeductionEvent(JsonNode data, String eventType) throws Exception {
@@ -211,7 +212,6 @@ public class NetPayProcessor implements Processor<String, String, String, String
         String deductionId = data.path("Id").asText(null);
         if (employeeId == null || deductionId == null) return;
 
-        // Load existing deduction map or create new
         DeductionMap dm;
         String existing = deductionStore.get(employeeId);
         if (existing != null) {
@@ -221,7 +221,6 @@ public class NetPayProcessor implements Processor<String, String, String, String
         }
 
         if ("deduction.deactivated".equals(eventType)) {
-            // Mark as inactive but keep in map
             dm.putDeduction(deductionId,
                 dm.getDeductions().containsKey(deductionId)
                     ? dm.getDeductions().get(deductionId).getAmount() : 0,
@@ -238,27 +237,67 @@ public class NetPayProcessor implements Processor<String, String, String, String
         deductionStore.put(employeeId, mapper.writeValueAsString(dm));
         log.info("Deduction updated: employee={}, deduction={}, event={}", employeeId, deductionId, eventType);
 
-        // Recompute for current pay period
+        recomputeCurrentPeriod(employeeId);
+    }
+
+    /**
+     * Recompute net pay for the current pay period if we have employee info.
+     * Used by tax and deduction handlers where there's no specific pay period in the event.
+     */
+    private void recomputeCurrentPeriod(String employeeId) throws Exception {
         long currentPeriod = getCurrentPayPeriod();
-        String storeKey = employeeId + ":" + currentPeriod;
-        if (grossPayStore.containsKey(storeKey)) {
+        // Only recompute if we have data for this employee
+        if (employeeInfoStore.containsKey(employeeId)) {
             computeAndEmit(employeeId, currentPeriod);
         }
     }
 
     private void computeAndEmit(String employeeId, long payPeriodNumber) throws Exception {
-        String storeKey = employeeId + ":" + payPeriodNumber;
-        String gpJson = grossPayStore.get(storeKey);
-        if (gpJson == null) return;
+        if (deactivatedEmployees.contains(employeeId)) {
+            String outputKey = mapper.writeValueAsString(
+                mapper.createObjectNode()
+                    .put("EMPLOYEE_ID", employeeId)
+                    .put("PAY_PERIOD_NUMBER", payPeriodNumber)
+            );
+            context.forward(new Record<>(outputKey, null, System.currentTimeMillis()));
+            log.info("Skipped (deactivated): employee={}, period={}, tombstone emitted", employeeId, payPeriodNumber);
+            return;
+        }
 
-        GrossPay gp = mapper.readValue(gpJson, GrossPay.class);
-        double grossPay = gp.getGrossPay();
+        // Load employee info for gross pay calculation
+        String infoJson = employeeInfoStore.get(employeeId);
+        if (infoJson == null) return; // Can't compute without pay rate info
 
-        // Load tax config (may not exist yet)
-        double federalTax = 0;
-        double stateTax = 0;
-        double addlFederal = 0;
-        double addlState = 0;
+        EmployeeInfo info = mapper.readValue(infoJson, EmployeeInfo.class);
+
+        // Compute total hours worked
+        double totalHoursWorked;
+        if ("2".equals(info.getPayType())) {
+            // Salary: use payPeriodHours instead of time entries
+            totalHoursWorked = info.getPayPeriodHours();
+        } else {
+            // Hourly: sum hours from the time entry map — O(N) over unique entries only
+            String hoursKey = employeeId + ":" + payPeriodNumber;
+            ConcurrentHashMap<String, Double> entries = hoursStore.get(hoursKey);
+            if (entries == null || entries.isEmpty()) {
+                totalHoursWorked = 0;
+            } else {
+                totalHoursWorked = entries.values().stream().mapToDouble(Double::doubleValue).sum();
+            }
+        }
+
+        // Compute effective hourly rate and gross pay
+        double effectiveHourlyRate;
+        if ("2".equals(info.getPayType())) {
+            // Salary: annual rate / 2080 (52 weeks x 40 hours)
+            effectiveHourlyRate = info.getPayRate() / 2080.0;
+        } else {
+            effectiveHourlyRate = info.getPayRate();
+        }
+        double grossPay = effectiveHourlyRate * totalHoursWorked;
+
+        // Compute taxes
+        double federalTax = 0, stateTax = 0, addlFederal = 0, addlState = 0;
         String tcJson = taxConfigStore.get(employeeId);
         if (tcJson != null) {
             TaxConfig tc = mapper.readValue(tcJson, TaxConfig.class);
@@ -267,12 +306,10 @@ public class NetPayProcessor implements Processor<String, String, String, String
             addlFederal = tc.getAdditionalFederalWithholding();
             addlState = tc.getAdditionalStateWithholding();
         }
-
         double totalTax = federalTax + stateTax + addlFederal + addlState;
 
-        // Load deductions
-        double fixedDeductions = 0;
-        double percentDeductions = 0;
+        // Compute deductions
+        double fixedDeductions = 0, percentDeductions = 0;
         String dmJson = deductionStore.get(employeeId);
         if (dmJson != null) {
             DeductionMap dm = mapper.readValue(dmJson, DeductionMap.class);
@@ -280,8 +317,11 @@ public class NetPayProcessor implements Processor<String, String, String, String
             percentDeductions = dm.computePercentTotal(grossPay);
         }
         double totalDeductions = fixedDeductions + percentDeductions;
-
         double netPay = grossPay - totalTax - totalDeductions;
+
+        // Pay period date range
+        String payPeriodStart = formatPayPeriodBoundary(payPeriodNumber);
+        String payPeriodEnd = formatPayPeriodBoundary(payPeriodNumber + 1);
 
         // Build result
         NetPayResult result = new NetPayResult();
@@ -295,15 +335,14 @@ public class NetPayProcessor implements Processor<String, String, String, String
         result.setTotalPercentDeductions(roundTwo(percentDeductions));
         result.setTotalDeductions(roundTwo(totalDeductions));
         result.setNetPay(roundTwo(netPay));
-        result.setPayRate(gp.getPayRate());
-        result.setPayType(gp.getPayType());
-        result.setTotalHoursWorked(gp.getTotalHoursWorked());
-        result.setPayPeriodStart(gp.getPayPeriodStart());
-        result.setPayPeriodEnd(gp.getPayPeriodEnd());
+        result.setPayRate(info.getPayRate());
+        result.setPayType(info.getPayType());
+        result.setTotalHoursWorked(totalHoursWorked);
+        result.setPayPeriodStart(payPeriodStart);
+        result.setPayPeriodEnd(payPeriodEnd);
         result.setEmployeeId(employeeId);
         result.setPayPeriodNumber(payPeriodNumber);
 
-        // Output key: {"EMPLOYEE_ID":"...","PAY_PERIOD_NUMBER":55}
         String outputKey = mapper.writeValueAsString(
             mapper.createObjectNode()
                 .put("EMPLOYEE_ID", employeeId)
@@ -316,8 +355,32 @@ public class NetPayProcessor implements Processor<String, String, String, String
             employeeId, payPeriodNumber, grossPay, result.getNetPay());
     }
 
+    /**
+     * Parse an ISO timestamp and compute its pay period number.
+     * Handles both "2026-03-14T10:00:00" and "2026-03-14T10:00:00Z" formats.
+     */
+    static long computePayPeriodFromTimestamp(String timestamp) {
+        // Trim fractional seconds and trailing Z for consistent parsing
+        String clean = timestamp;
+        if (clean.contains(".")) {
+            clean = clean.substring(0, clean.indexOf('.'));
+        }
+        if (clean.endsWith("Z")) {
+            clean = clean.substring(0, clean.length() - 1);
+        }
+        long epochMs = LocalDateTime.parse(clean, PAY_PERIOD_FMT)
+            .toInstant(ZoneOffset.UTC).toEpochMilli();
+        return (epochMs - PAY_PERIOD_EPOCH_MS) / PAY_PERIOD_DURATION_MS;
+    }
+
     static long getCurrentPayPeriod() {
         return (System.currentTimeMillis() - PAY_PERIOD_EPOCH_MS) / PAY_PERIOD_DURATION_MS;
+    }
+
+    private static String formatPayPeriodBoundary(long periodNumber) {
+        long epochMs = PAY_PERIOD_EPOCH_MS + (periodNumber * PAY_PERIOD_DURATION_MS);
+        return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMs), ZoneOffset.UTC)
+            .format(PAY_PERIOD_FMT);
     }
 
     private static double roundTwo(double value) {

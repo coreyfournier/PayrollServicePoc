@@ -137,8 +137,6 @@ kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic timeentry-events
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic taxinfo-events
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic deduction-events
-kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
-kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-gross-pay
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
@@ -146,7 +144,7 @@ kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-events
 
 # Purge non-compacted topics via kafka-delete-records (3 partitions each)
-PURGE_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay transfer-requests transfer-events"
+PURGE_TOPICS="employee-events timeentry-events taxinfo-events deduction-events transfer-requests transfer-events"
 python3 -c "
 import json
 topics = '$PURGE_TOPICS'.split()
@@ -174,7 +172,7 @@ log "  Recreated compacted topics (employee-net-pay, employee-search, employee-i
 # (e.g., elasticsearch-updater subscribes to employee-info and employee-net-pay at startup,
 # triggering Kafka auto-creation before seed runs). --alter --partitions is idempotent when
 # the topic already has the target partition count.
-ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events payperiod-hours-changed employee-gross-pay employee-net-pay employee-search employee-info transfer-requests transfer-events"
+ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events employee-net-pay employee-search employee-info transfer-requests transfer-events"
 for topic in $ALL_TOPICS; do
   kafka-topics --alter --topic $topic --partitions 3 --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 done
