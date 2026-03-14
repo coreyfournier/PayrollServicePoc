@@ -5,9 +5,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Dapr.AspNetCore" Version="1.16.1" />
-    <PackageReference Include="Dapr.Actors.AspNetCore" Version="1.16.1" />
-    <PackageReference Include="Dapr.Workflow" Version="1.16.1" />
+    <PackageReference Include="MassTransit" Version="8.4.0" />
+    <PackageReference Include="MassTransit.MongoDb" Version="8.4.0" />
+    <PackageReference Include="MassTransit.Kafka" Version="8.4.0" />
     <PackageReference Include="MediatR" Version="12.2.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
   </ItemGroup>

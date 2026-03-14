@@ -2,6 +2,9 @@ package com.payroll.netpay;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.payroll.netpay.model.DeductionMap;
+import com.payroll.netpay.model.EmployeeInfo;
+import com.payroll.netpay.model.TaxConfig;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -30,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
 
@@ -38,7 +42,6 @@ public class NetPayApp {
     private static final Logger log = LoggerFactory.getLogger(NetPayApp.class);
     private static final long RESTART_DELAY_MS = 30_000;
 
-    static final String GROSS_PAY_TOPIC = "employee-gross-pay";
     static final String EMPLOYEE_EVENTS_TOPIC = "employee-events";
     static final String NET_PAY_TOPIC = "employee-net-pay";
 
@@ -77,7 +80,8 @@ public class NetPayApp {
      */
     private static boolean runOnce() {
         // Clear stale in-memory state from any previous run
-        NetPayProcessor.grossPayStore.clear();
+        NetPayProcessor.employeeInfoStore.clear();
+        NetPayProcessor.hoursStore.clear();
         NetPayProcessor.taxConfigStore.clear();
         NetPayProcessor.deductionStore.clear();
         NetPayProcessor.deactivatedEmployees.clear();
@@ -178,9 +182,10 @@ public class NetPayApp {
     }
 
     /**
-     * Pre-scan the employee-events topic from the beginning to build the deactivatedEmployees set.
-     * This ensures all deactivated employees are known before any gross pay events are processed,
-     * avoiding the cross-partition ordering problem between the two source topics.
+     * Pre-scan the employee-events topic from the beginning to build all in-memory state.
+     * This ensures correct gross pay and net pay computation from the first event during
+     * topology replay, avoiding cross-partition ordering issues where time entry events
+     * arrive before employee info events (different CloudEvent IDs = different partitions).
      */
     private static void prescanEmployeeEvents(String bootstrapServers) {
         ObjectMapper mapper = new ObjectMapper();
@@ -193,7 +198,6 @@ public class NetPayApp {
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
 
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
-            // Manually assign all partitions and seek to beginning
             List<TopicPartition> partitions = consumer.partitionsFor(EMPLOYEE_EVENTS_TOPIC)
                 .stream()
                 .map(pi -> new TopicPartition(pi.topic(), pi.partition()))
@@ -201,16 +205,14 @@ public class NetPayApp {
             consumer.assign(partitions);
             consumer.seekToBeginning(partitions);
 
-            // Get end offsets to know when we've caught up
             Map<TopicPartition, Long> endOffsets = consumer.endOffsets(partitions);
 
-            int created = 0, deactivated = 0, totalRecords = 0;
+            int employees = 0, timeEntries = 0, taxConfigs = 0, deductions = 0, deactivated = 0, totalRecords = 0;
             boolean done = false;
 
             while (!done) {
                 ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(5));
                 if (records.isEmpty()) {
-                    // Check if we've reached the end of all partitions
                     done = true;
                     for (TopicPartition tp : partitions) {
                         if (consumer.position(tp) < endOffsets.get(tp)) {
@@ -227,32 +229,93 @@ public class NetPayApp {
 
                     try {
                         JsonNode envelope = mapper.readTree(record.value());
-                        String dataStr = envelope.path("data").asText(null);
-                        if (dataStr == null) {
-                            JsonNode dataNode = envelope.path("data");
-                            if (dataNode.isMissingNode() || dataNode.isNull()) continue;
-                            dataStr = dataNode.toString();
-                        }
-
-                        JsonNode data = mapper.readTree(dataStr);
+                        JsonNode data = envelope.path("data");
+                        if (data.isMissingNode() || data.isNull()) continue;
                         JsonNode domainEvents = data.path("DomainEvents");
                         if (!domainEvents.isArray() || domainEvents.isEmpty()) continue;
                         String eventType = domainEvents.get(0).path("EventType").asText("");
 
-                        if ("employee.created".equals(eventType)) {
-                            created++;
-                            // Don't remove from deactivated set here. Dapr outbox assigns
-                            // different CloudEvent IDs per write, so events for the same
-                            // employee land on different partitions. When polling, a created
-                            // event from one partition may arrive AFTER a deactivated event
-                            // from another partition (despite being chronologically earlier),
-                            // incorrectly undoing the deactivation. With GUIDs, employee IDs
-                            // are never reused, so only tracking deactivations is sufficient.
-                        } else if ("employee.deactivated".equals(eventType)) {
-                            String empId = data.path("Id").asText(null);
-                            if (empId != null) {
-                                NetPayProcessor.deactivatedEmployees.add(empId);
-                                deactivated++;
+                        switch (eventType) {
+                            case "employee.created":
+                            case "employee.updated": {
+                                String empId = data.path("Id").asText(null);
+                                if (empId == null) break;
+                                double payRate = data.path("PayRate").asDouble(0);
+                                String payType = String.valueOf(data.path("PayType").asInt(1));
+                                double payPeriodHours = data.path("PayPeriodHours").asDouble(40);
+                                EmployeeInfo info = new EmployeeInfo(empId, payRate, payType, payPeriodHours);
+                                NetPayProcessor.employeeInfoStore.put(empId, mapper.writeValueAsString(info));
+                                employees++;
+                                break;
+                            }
+                            case "employee.deactivated": {
+                                String empId = data.path("Id").asText(null);
+                                if (empId != null) {
+                                    NetPayProcessor.deactivatedEmployees.add(empId);
+                                    NetPayProcessor.employeeInfoStore.remove(empId);
+                                    // Remove hours for deactivated employee
+                                    NetPayProcessor.hoursStore.keySet().removeIf(k -> k.startsWith(empId + ":"));
+                                    NetPayProcessor.taxConfigStore.remove(empId);
+                                    NetPayProcessor.deductionStore.remove(empId);
+                                    deactivated++;
+                                }
+                                break;
+                            }
+                            case "timeentry.clockedout":
+                            case "timeentry.updated": {
+                                String empId = data.path("EmployeeId").asText(null);
+                                String teId = data.path("Id").asText(null);
+                                String clockIn = data.path("ClockIn").asText(null);
+                                if (empId == null || teId == null || clockIn == null) break;
+                                double hours = data.path("HoursWorked").asDouble(0);
+                                long period = NetPayProcessor.computePayPeriodFromTimestamp(clockIn);
+                                String key = empId + ":" + period;
+                                NetPayProcessor.hoursStore.computeIfAbsent(key, k -> new ConcurrentHashMap<>())
+                                    .put(teId, hours);
+                                timeEntries++;
+                                break;
+                            }
+                            default: {
+                                if (eventType.startsWith("taxinfo.")) {
+                                    String empId = data.path("EmployeeId").asText(null);
+                                    if (empId == null) break;
+                                    TaxConfig tc = new TaxConfig(
+                                        empId,
+                                        data.path("FederalFilingStatus").asText("Single"),
+                                        data.path("State").asText(""),
+                                        data.path("AdditionalFederalWithholding").asDouble(0),
+                                        data.path("AdditionalStateWithholding").asDouble(0)
+                                    );
+                                    NetPayProcessor.taxConfigStore.put(empId, mapper.writeValueAsString(tc));
+                                    taxConfigs++;
+                                } else if (eventType.startsWith("deduction.")) {
+                                    String empId = data.path("EmployeeId").asText(null);
+                                    String dedId = data.path("Id").asText(null);
+                                    if (empId == null || dedId == null) break;
+                                    DeductionMap dm;
+                                    String existing = NetPayProcessor.deductionStore.get(empId);
+                                    if (existing != null) {
+                                        dm = mapper.readValue(existing, DeductionMap.class);
+                                    } else {
+                                        dm = new DeductionMap(empId);
+                                    }
+                                    if ("deduction.deactivated".equals(eventType)) {
+                                        dm.putDeduction(dedId,
+                                            dm.getDeductions().containsKey(dedId)
+                                                ? dm.getDeductions().get(dedId).getAmount() : 0,
+                                            dm.getDeductions().containsKey(dedId)
+                                                && dm.getDeductions().get(dedId).isPercentage(),
+                                            false);
+                                    } else {
+                                        dm.putDeduction(dedId,
+                                            data.path("Amount").asDouble(0),
+                                            data.path("IsPercentage").asBoolean(false),
+                                            data.path("IsActive").asBoolean(true));
+                                    }
+                                    NetPayProcessor.deductionStore.put(empId, mapper.writeValueAsString(dm));
+                                    deductions++;
+                                }
+                                break;
                             }
                         }
                     } catch (Exception e) {
@@ -270,10 +333,10 @@ public class NetPayApp {
                 }
             }
 
-            log.info("Pre-scan complete: {} records scanned, {} created, {} deactivated, {} employees in deactivated set",
-                totalRecords, created, deactivated, NetPayProcessor.deactivatedEmployees.size());
+            log.info("Pre-scan complete: {} records scanned, {} employee info, {} time entries, {} tax configs, {} deductions, {} deactivated",
+                totalRecords, employees, timeEntries, taxConfigs, deductions, deactivated);
         } catch (Exception e) {
-            log.warn("Pre-scan failed (will rely on runtime deactivation tracking): {}", e.getMessage());
+            log.warn("Pre-scan failed (will rely on runtime state building): {}", e.getMessage());
         }
     }
 
@@ -366,29 +429,21 @@ public class NetPayApp {
     static Topology buildTopology() {
         Topology topology = new Topology();
 
-        // Sources
-        topology.addSource("gross-pay-source",
-            Serdes.String().deserializer(), Serdes.String().deserializer(),
-            GROSS_PAY_TOPIC);
-
+        // Single source — all event types come from employee-events
         topology.addSource("employee-events-source",
             Serdes.String().deserializer(), Serdes.String().deserializer(),
             EMPLOYEE_EVENTS_TOPIC);
 
-        // Processors — each wired to its source
-        topology.addProcessor("gross-pay-processor",
-            () -> new NetPayProcessor("gross-pay"),
-            "gross-pay-source");
-
-        topology.addProcessor("employee-events-processor",
-            () -> new NetPayProcessor("employee-events"),
+        // Single processor handles employee info, time entries, tax, deductions, and gross pay
+        topology.addProcessor("net-pay-processor",
+            NetPayProcessor::new,
             "employee-events-source");
 
         // Sink
         topology.addSink("net-pay-sink",
             NET_PAY_TOPIC,
             Serdes.String().serializer(), Serdes.String().serializer(),
-            "gross-pay-processor", "employee-events-processor");
+            "net-pay-processor");
 
         return topology;
     }

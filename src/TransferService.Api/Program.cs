@@ -1,7 +1,7 @@
-using Dapr.Workflow;
-using TransferService.Api.Actors;
-using TransferService.Api.Workflows;
-using TransferService.Api.Workflows.Activities;
+using MassTransit;
+using MongoDB.Driver;
+using TransferService.Api.Consumers;
+using TransferService.Api.Sagas;
 using TransferService.Application.Commands.BankAccount;
 using TransferService.Application.Options;
 using TransferService.Infrastructure;
@@ -19,7 +19,7 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services.AddControllers().AddDapr();
+builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -28,31 +28,54 @@ builder.Services.AddSwaggerGen(c =>
 
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(CreateBankAccountCommand).Assembly));
 
-builder.Services.AddDaprClient();
-
-builder.Services.AddDaprWorkflow(options =>
-{
-    options.RegisterWorkflow<TransferWorkflow>();
-    options.RegisterActivity<ValidateTransferActivity>();
-    options.RegisterActivity<UpdateTransferStatusActivity>();
-    options.RegisterActivity<ExecuteBankTransferActivity>();
-    options.RegisterActivity<CompleteTransferActivity>();
-    options.RegisterActivity<FailTransferActivity>();
-    options.RegisterActivity<VerifyBalanceActivity>();
-    options.RegisterActivity<MarkAwaitingConfirmationActivity>();
-});
-
-builder.Services.AddActors(options =>
-{
-    options.Actors.RegisterActor<TransferActor>();
-});
-
 builder.Services.Configure<TransferLimitsOptions>(
     builder.Configuration.GetSection(TransferLimitsOptions.SectionName));
 
 var mongoConnectionString = builder.Configuration.GetValue<string>("MongoDB:ConnectionString") ?? "mongodb://localhost:27017";
 var mongoDatabaseName = builder.Configuration.GetValue<string>("MongoDB:DatabaseName") ?? "transfer_db";
 builder.Services.AddTransferInfrastructure(mongoConnectionString, mongoDatabaseName);
+
+// Register IMongoDatabase for saga state queries in the controller
+builder.Services.AddSingleton<IMongoDatabase>(sp =>
+{
+    var client = new MongoClient(mongoConnectionString);
+    return client.GetDatabase(mongoDatabaseName);
+});
+
+var kafkaBootstrapServers = builder.Configuration.GetValue<string>("Kafka:BootstrapServers") ?? "kafka:9092";
+
+builder.Services.AddMassTransit(x =>
+{
+    x.AddSagaStateMachine<TransferStateMachine, TransferState>()
+        .MongoDbRepository(r =>
+        {
+            r.Connection = mongoConnectionString;
+            r.DatabaseName = mongoDatabaseName;
+            r.CollectionName = "transfer_sagas";
+        });
+
+    x.UsingInMemory((context, cfg) =>
+    {
+        cfg.ConfigureEndpoints(context);
+    });
+
+    x.AddRider(rider =>
+    {
+        rider.AddConsumer<TransferRequestConsumer>();
+
+        rider.AddProducer<string, string>("transfer-events");
+
+        rider.UsingKafka((context, k) =>
+        {
+            k.Host(kafkaBootstrapServers);
+
+            k.TopicEndpoint<TransferRequestMessage>("transfer-requests", "transfer-service-group", e =>
+            {
+                e.ConfigureConsumer<TransferRequestConsumer>(context);
+            });
+        });
+    });
+});
 
 var app = builder.Build();
 
@@ -69,9 +92,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
-app.UseCloudEvents();
 app.MapControllers();
-app.MapSubscribeHandler();
-app.MapActorsHandlers();
 
 app.Run();

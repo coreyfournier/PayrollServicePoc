@@ -11,8 +11,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Dapr.Client" Version="1.13.0" />
-<PackageReference Include="MongoDB.Driver" Version="2.24.0" />
+    <PackageReference Include="MassTransit" Version="8.4.0" />
+    <PackageReference Include="MassTransit.MongoDb" Version="8.4.0" />
+    <PackageReference Include="MassTransit.Kafka" Version="8.4.0" />
+    <PackageReference Include="MongoDB.Driver" Version="3.2.1" />
   </ItemGroup>
 
 </Project>

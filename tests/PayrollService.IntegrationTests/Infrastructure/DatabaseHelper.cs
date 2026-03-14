@@ -17,43 +17,33 @@ public class DatabaseHelper : IDisposable
         _mysqlConnectionString = ServiceEndpoints.MySqlConnectionString;
     }
 
-    // MongoDB: Dapr transfer state store
-    public async Task<JsonDocument?> GetDaprTransferStateAsync(Guid transferId)
+    // MongoDB: Transfer state from transfers collection
+    public async Task<JsonDocument?> GetTransferStateAsync(Guid transferId)
     {
-        var collection = _transferDb.GetCollection<BsonDocument>("dapr_transfer_state");
-        var filter = Builders<BsonDocument>.Filter.Regex("_id", $".*transfer-{transferId}$");
+        var collection = _transferDb.GetCollection<BsonDocument>("transfers");
+        var filter = Builders<BsonDocument>.Filter.Eq("_id", transferId.ToString());
         var doc = await collection.Find(filter).FirstOrDefaultAsync();
 
         if (doc == null) return null;
 
-        var value = doc.GetValue("value", BsonNull.Value);
-        if (value.IsBsonNull) return null;
-
-        // Value can be a BsonDocument (object) or a string
-        if (value.IsBsonDocument)
-            return JsonDocument.Parse(value.AsBsonDocument.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson }));
-
-        return JsonDocument.Parse(value.AsString);
+        return JsonDocument.Parse(doc.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { OutputMode = MongoDB.Bson.IO.JsonOutputMode.RelaxedExtendedJson }));
     }
 
     // MongoDB: Clean transfers for a specific employee
     public async Task CleanTransfersAsync(Guid? employeeId = null)
     {
-        var transferState = _transferDb.GetCollection<BsonDocument>("dapr_transfer_state");
         var transfers = _transferDb.GetCollection<BsonDocument>("transfers");
+        var sagas = _transferDb.GetCollection<BsonDocument>("transfer_sagas");
 
         if (employeeId == null)
         {
-            await transferState.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty);
             await transfers.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty);
+            await sagas.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty);
         }
         else
         {
-            // Dapr state keys contain the transfer ID, not employee ID directly.
-            // For targeted cleanup, we'd need to find transfers by employee first.
-            // For simplicity, clean all transfer state.
-            await transferState.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty);
             await transfers.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty);
+            await sagas.DeleteManyAsync(FilterDefinition<BsonDocument>.Empty);
         }
     }
 

@@ -59,11 +59,11 @@ public class TransferHappyPathTests
             transfer.FailureReason.Should().NotBeNullOrEmpty();
         }
 
-        // Verify Dapr state store consistency
-        var daprState = await _fixture.Db.GetDaprTransferStateAsync(transferId);
-        daprState.Should().NotBeNull("transfer must exist in Dapr state store");
+        // Verify MongoDB transfers collection consistency
+        var transferState = await _fixture.Db.GetTransferStateAsync(transferId);
+        transferState.Should().NotBeNull("transfer must exist in MongoDB transfers collection");
         var expectedStatus = transfer.Status == 3 ? "Completed" : "Failed";
-        daprState!.RootElement.GetProperty("status").GetString()
+        transferState!.RootElement.GetProperty("status").GetString()
             .Should().Be(expectedStatus);
 
         // Verify Kafka event propagated to ListenerApi MySQL

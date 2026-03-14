@@ -1,3 +1,5 @@
+using Confluent.Kafka;
+using MassTransit;
 using PayrollService.Application.Commands.Employee;
 using PayrollService.Infrastructure;
 using PayrollService.Infrastructure.Persistence;
@@ -16,7 +18,7 @@ builder.Services.AddCors(options =>
 });
 
 // Add services to the container
-builder.Services.AddControllers().AddDapr();
+builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -26,14 +28,33 @@ builder.Services.AddSwaggerGen(c =>
 // Add MediatR
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(CreateEmployeeCommand).Assembly));
 
-// Add Dapr client
-builder.Services.AddDaprClient();
+// Add MassTransit (in-memory bus for future consumer support)
+builder.Services.AddMassTransit(x =>
+{
+    x.UsingInMemory((context, cfg) =>
+    {
+        cfg.ConfigureEndpoints(context);
+    });
+});
+
+// Add Confluent Kafka producer for publishing CloudEvent messages to Kafka topics
+var kafkaBootstrapServers = builder.Configuration.GetValue<string>("Kafka:BootstrapServers") ?? "kafka:9092";
+builder.Services.AddSingleton<IProducer<string, string>>(sp =>
+{
+    var config = new ProducerConfig
+    {
+        BootstrapServers = kafkaBootstrapServers,
+        ClientId = "payroll-api",
+        Acks = Acks.All,
+        EnableIdempotence = true
+    };
+    return new ProducerBuilder<string, string>(config).Build();
+});
 
 // Add Infrastructure services
 var mongoConnectionString = builder.Configuration.GetValue<string>("MongoDB:ConnectionString") ?? "mongodb://localhost:27017";
 var mongoDatabaseName = builder.Configuration.GetValue<string>("MongoDB:DatabaseName") ?? "payroll_db";
-var useDaprOutbox = builder.Configuration.GetValue<bool>("Features:UseDaprOutbox");
-builder.Services.AddInfrastructure(mongoConnectionString, mongoDatabaseName, useDaprOutbox);
+builder.Services.AddInfrastructure(mongoConnectionString, mongoDatabaseName);
 
 var app = builder.Build();
 
@@ -52,8 +73,6 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
-app.UseCloudEvents();
 app.MapControllers();
-app.MapSubscribeHandler();
 
 app.Run();

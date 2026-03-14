@@ -334,7 +334,7 @@ public class DomainEventInfo
 
 public class TransferEventPayload
 {
-    // Transfer entity fields from Dapr outbox (entity state format)
+    // Transfer entity fields
     public Guid Id { get; set; }
     public Guid EmployeeId { get; set; }
     public decimal Amount { get; set; }
@@ -342,21 +342,36 @@ public class TransferEventPayload
     public string? ExternalReferenceId { get; set; }
     public string? FailureReason { get; set; }
     public decimal? CurrentBalance { get; set; }
+    public string? Status { get; set; }
 
     // Nested domain events
     public List<DomainEventInfo>? DomainEvents { get; set; }
 
     public (Guid TransferId, Guid EmployeeId, string EventType) ResolveTransferInfo()
     {
-        var domainEvent = DomainEvents?.FirstOrDefault();
-        var eventType = domainEvent?.EventType ?? string.Empty;
-        return (Id, EmployeeId, eventType);
+        // Prefer the entity Status field (reliable), fall back to domain event type
+        if (!string.IsNullOrEmpty(Status))
+        {
+            var eventType = Status switch
+            {
+                "Initiated" => "transfer.initiated",
+                "Processing" => "transfer.processing",
+                "Completed" => "transfer.completed",
+                "Failed" => "transfer.failed",
+                "AwaitingConfirmation" => "transfer.balance_changed",
+                _ => DomainEvents?.LastOrDefault()?.EventType ?? string.Empty
+            };
+            return (Id, EmployeeId, eventType);
+        }
+
+        var domainEvent = DomainEvents?.LastOrDefault();
+        var evtType = domainEvent?.EventType ?? string.Empty;
+        return (Id, EmployeeId, evtType);
     }
 
     public decimal? ResolveCurrentBalance()
     {
-        var domainEvent = DomainEvents?.FirstOrDefault(e => e.EventType == "transfer.balance_changed");
-        return domainEvent?.CurrentBalance;
+        return CurrentBalance ?? DomainEvents?.FirstOrDefault(e => e.EventType == "transfer.balance_changed")?.CurrentBalance;
     }
 }
 

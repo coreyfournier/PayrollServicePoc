@@ -1,12 +1,12 @@
 using System.Text.Json;
-using Dapr.Actors;
-using Dapr.Actors.Client;
-using Dapr.Workflow;
+using MassTransit;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
-using TransferService.Api.Actors;
+using MongoDB.Driver;
+using TransferService.Api.Sagas;
 using TransferService.Application.DTOs;
 using TransferService.Application.Interfaces;
+using TransferService.Application.Messages;
 using TransferService.Application.Queries.Transfer;
 
 namespace TransferService.Api.Controllers;
@@ -16,20 +16,20 @@ namespace TransferService.Api.Controllers;
 public class TransfersController : ControllerBase
 {
     private readonly IMediator _mediator;
-    private readonly IActorProxyFactory _actorProxyFactory;
-    private readonly DaprWorkflowClient _workflowClient;
+    private readonly IPublishEndpoint _publishEndpoint;
     private readonly ITransferValidationService _validationService;
+    private readonly IMongoCollection<TransferState> _sagaCollection;
 
     public TransfersController(
         IMediator mediator,
-        IActorProxyFactory actorProxyFactory,
-        DaprWorkflowClient workflowClient,
-        ITransferValidationService validationService)
+        IPublishEndpoint publishEndpoint,
+        ITransferValidationService validationService,
+        IMongoDatabase mongoDatabase)
     {
         _mediator = mediator;
-        _actorProxyFactory = actorProxyFactory;
-        _workflowClient = workflowClient;
+        _publishEndpoint = publishEndpoint;
         _validationService = validationService;
+        _sagaCollection = mongoDatabase.GetCollection<TransferState>("transfer_sagas");
     }
 
     [HttpPost("validate")]
@@ -45,18 +45,14 @@ public class TransfersController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<TransferActorResult>> Initiate([FromBody] InitiateTransferDto dto)
+    public async Task<ActionResult<TransferInitiateResult>> Initiate([FromBody] InitiateTransferDto dto)
     {
-        var actorId = new ActorId(dto.EmployeeId.ToString());
-        var actor = _actorProxyFactory.CreateActorProxy<ITransferActor>(actorId, "TransferActor");
+        var transferId = Guid.NewGuid();
 
-        var result = await actor.InitiateTransferAsync(
-            new TransferActorRequest(dto.Amount, dto.PayPeriodNumber, dto.BankAccountId));
+        await _publishEndpoint.Publish(new InitiateTransferMessage(
+            transferId, dto.EmployeeId, dto.Amount, dto.PayPeriodNumber, dto.BankAccountId));
 
-        if (!result.Success)
-            return BadRequest(result);
-
-        return Accepted(result);
+        return Accepted(new TransferInitiateResult(true, transferId, null));
     }
 
     [HttpGet("recent")]
@@ -93,126 +89,34 @@ public class TransfersController : ControllerBase
     [HttpGet("{id:guid}/workflow")]
     public async Task<ActionResult> GetWorkflowState(Guid id)
     {
-        var workflowId = $"transfer-{id}";
-        try
-        {
-            var state = await _workflowClient.GetWorkflowStateAsync(workflowId);
-            if (state == null || !state.Exists)
-                return NotFound(new { error = "Workflow not found" });
+        var sagaState = await _sagaCollection.Find(s => s.CorrelationId == id).FirstOrDefaultAsync();
+        if (sagaState == null)
+            return NotFound(new { error = "Saga state not found" });
 
-            object? input = null;
-            object? output = null;
-            object? failureDetails = null;
-            try { input = state.ReadInputAs<object>(); } catch { }
-            try { output = state.ReadOutputAs<object>(); } catch { }
-            try { failureDetails = state.FailureDetails; } catch { }
-
-            return Ok(new
-            {
-                instanceId = workflowId,
-                runtimeStatus = state.RuntimeStatus.ToString(),
-                createdAt = state.CreatedAt,
-                lastUpdatedAt = state.LastUpdatedAt,
-                input,
-                output,
-                failureDetails,
-            });
-        }
-        catch (Exception ex)
+        return Ok(new
         {
-            return NotFound(new { error = $"Workflow not found: {ex.Message}" });
-        }
+            instanceId = $"transfer-{id}",
+            runtimeStatus = sagaState.CurrentState,
+            correlationId = sagaState.CorrelationId,
+            employeeId = sagaState.EmployeeId,
+            amount = sagaState.Amount,
+            retryCount = sagaState.RetryCount,
+            externalReferenceId = sagaState.ExternalReferenceId,
+            failureReason = sagaState.FailureReason,
+        });
     }
 
     [HttpPost("{id:guid}/accept")]
     public async Task<ActionResult> AcceptBalanceChange(Guid id, [FromBody] AcceptBalanceChangeDto dto)
     {
-        var workflowId = $"transfer-{id}";
-        await _workflowClient.RaiseEventAsync(workflowId, "BalanceAccepted", dto.Accepted);
-        return Ok();
-    }
+        // Look up the saga to get the employeeId
+        var sagaState = await _sagaCollection.Find(s => s.CorrelationId == id).FirstOrDefaultAsync();
+        var employeeId = sagaState?.EmployeeId ?? Guid.Empty;
 
-    [HttpPost("process-request")]
-    public async Task<ActionResult> ProcessTransferRequest()
-    {
-        // Read body manually to handle both CloudEvent-wrapped (Dapr outbox) and
-        // raw JSON (Debezium CDC outbox) messages without content-type issues.
-        using var reader = new StreamReader(Request.Body);
-        var body = await reader.ReadToEndAsync();
-
-        JsonElement root;
-        try
-        {
-            using var doc = JsonDocument.Parse(body);
-            root = doc.RootElement.Clone();
-        }
-        catch (JsonException)
-        {
-            return BadRequest("Invalid JSON payload");
-        }
-
-        // Extract payload from CloudEvent wrapper if present
-        var payload = root;
-        if (root.TryGetProperty("data", out var dataElement))
-        {
-            if (dataElement.ValueKind == JsonValueKind.String)
-            {
-                try { payload = JsonDocument.Parse(dataElement.GetString()!).RootElement; }
-                catch { return BadRequest("Invalid data payload"); }
-            }
-            else
-            {
-                payload = dataElement;
-            }
-        }
-
-        var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-
-        // Route by action type
-        var action = payload.TryGetProperty("Action", out var actionProp)
-            ? actionProp.GetString()
-            : payload.TryGetProperty("action", out var actionPropLower)
-                ? actionPropLower.GetString()
-                : null;
-
-        if (action == "accept-balance")
-        {
-            // Accept/reject balance change — raise workflow event
-            var cmd = JsonSerializer.Deserialize<AcceptBalanceCommand>(payload.GetRawText(), opts);
-            if (cmd == null || cmd.TransferId == Guid.Empty)
-                return BadRequest("Missing required accept-balance fields");
-
-            var workflowId = $"transfer-{cmd.TransferId}";
-            await _workflowClient.RaiseEventAsync(workflowId, "BalanceAccepted", cmd.Accepted);
-            return Ok();
-        }
-
-        // Default: initiate transfer
-        var request = JsonSerializer.Deserialize<TransferRequestEvent>(payload.GetRawText(), opts);
-
-        if (request == null || request.EmployeeId == Guid.Empty)
-            return BadRequest("Missing required transfer request fields");
-
-        var actorId = new ActorId(request.EmployeeId.ToString());
-        var actor = _actorProxyFactory.CreateActorProxy<ITransferActor>(actorId, "TransferActor");
-
-        await actor.InitiateTransferAsync(
-            new TransferActorRequest(request.Amount, request.PayPeriodNumber, request.BankAccountId, request.TransferId));
-
+        await _publishEndpoint.Publish(new AcceptBalanceMessage(id, employeeId, dto.Accepted));
         return Ok();
     }
 }
 
-public record TransferRequestEvent(
-    Guid EmployeeId,
-    decimal Amount,
-    long PayPeriodNumber,
-    Guid BankAccountId,
-    Guid? TransferId = null);
-
-public record AcceptBalanceCommand(
-    Guid TransferId,
-    Guid EmployeeId,
-    bool Accepted);
-
+public record TransferInitiateResult(bool Success, Guid? TransferId, string? ErrorMessage);
 public record AcceptBalanceChangeDto(bool Accepted);

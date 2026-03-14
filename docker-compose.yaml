@@ -78,8 +78,6 @@ services:
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic timeentry-events
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic taxinfo-events
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic deduction-events
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic payperiod-hours-changed
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-gross-pay
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
       kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
@@ -402,10 +400,7 @@ services:
       - ASPNETCORE_URLS=http://+:80
       - MongoDB__ConnectionString=mongodb://mongodb:27017/?replicaSet=rs0
       - MongoDB__DatabaseName=payroll_db
-      - Features__UseDaprOutbox=true
-      # Dapr sidecar endpoint configuration
-      - DAPR_HTTP_ENDPOINT=http://payroll-api-dapr:3500
-      - DAPR_GRPC_ENDPOINT=http://payroll-api-dapr:50001
+      - Kafka__BootstrapServers=kafka:9092
     deploy:
       resources:
         limits:
@@ -425,73 +420,6 @@ services:
       retries: 10
       start_period: 20s
 
-  # Dapr scheduler service (required for workflows in Dapr 1.16+)
-  scheduler:
-    image: "daprio/scheduler:1.16.0"
-    container_name: scheduler
-    command: ["./scheduler", "--port", "50006", "--etcd-data-dir", "/tmp/scheduler-data"]
-    restart: unless-stopped
-    ports:
-      - "50007:50006"
-    deploy:
-      resources:
-        limits:
-          cpus: '0.15'
-          memory: 128M
-    networks:
-      - payroll-network
-
-  # Dapr placement service (required for actors and workflows)
-  placement:
-    image: "daprio/placement:1.16.0"
-    container_name: placement
-    command: ["./placement", "-port", "50006"]
-    restart: unless-stopped
-    ports:
-      - "50006:50006"
-    deploy:
-      resources:
-        limits:
-          cpus: '0.1'
-          memory: 64M
-    networks:
-      - payroll-network
-
-  # Dapr sidecar for Payroll API
-  payroll-api-dapr:
-    image: "daprio/daprd:1.16.0"
-    container_name: payroll-api-dapr
-    command: [
-      "./daprd",
-      "-app-id", "payroll-api",
-      "-app-port", "80",
-      "-app-channel-address", "payroll-api",
-      "-dapr-http-port", "3500",
-      "-dapr-grpc-port", "50001",
-      "-resources-path", "/components",
-      "-config", "/config/config.yaml"
-    ]
-    ports:
-      - "3500:3500"   # Dapr HTTP port
-      - "50001:50001" # Dapr gRPC port
-    volumes:
-      - ./dapr/components:/components
-      - ./dapr:/config
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 128M
-    depends_on:
-      payroll-api:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      mongodb:
-        condition: service_healthy
-    networks:
-      - payroll-network
-
   # Transfer API Service
   transfer-api:
     build:
@@ -508,8 +436,7 @@ services:
       - TransferLimits__MaxPerPayPeriod=5
       - TransferLimits__MaxAmountPerPayPeriod=10000
       - TransferLimits__MaxPerDay=1
-      - DAPR_HTTP_ENDPOINT=http://transfer-api-dapr:3502
-      - DAPR_GRPC_ENDPOINT=http://transfer-api-dapr:50003
+      - Kafka__BootstrapServers=kafka:9092
     deploy:
       resources:
         limits:
@@ -528,44 +455,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
-
-  # Dapr sidecar for Transfer API
-  transfer-api-dapr:
-    image: "daprio/daprd:1.16.0"
-    container_name: transfer-api-dapr
-    command: [
-      "./daprd",
-      "-app-id", "transfer-api",
-      "-app-port", "80",
-      "-app-channel-address", "transfer-api",
-      "-dapr-http-port", "3502",
-      "-dapr-grpc-port", "50003",
-      "-placement-host-address", "placement:50006",
-      "-scheduler-host-address", "scheduler:50006",
-      "-resources-path", "/components",
-      "-config", "/config/config.yaml"
-    ]
-    volumes:
-      - ./dapr/components-transfer:/components
-      - ./dapr:/config
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 128M
-    depends_on:
-      transfer-api:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      mongodb:
-        condition: service_healthy
-      placement:
-        condition: service_started
-      scheduler:
-        condition: service_started
-    networks:
-      - payroll-network
 
   # Frontend Application
   frontend:
@@ -600,9 +489,7 @@ services:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:80
       - ConnectionStrings__DefaultConnection=Server=mysql;Database=listener_db;User=listener_user;Password=listener_password;
-      # Dapr sidecar endpoint configuration
-      - DAPR_HTTP_ENDPOINT=http://listener-api-dapr:3501
-      - DAPR_GRPC_ENDPOINT=http://listener-api-dapr:50002
+      - Kafka__BootstrapServers=kafka:9092
     deploy:
       resources:
         limits:
@@ -621,36 +508,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 30s
-
-  # Dapr sidecar for ListenerApi
-  listener-api-dapr:
-    image: "daprio/daprd:1.16.0"
-    container_name: listener-api-dapr
-    command: [
-      "./daprd",
-      "-app-id", "listener-api",
-      "-app-port", "80",
-      "-app-channel-address", "listener-api",
-      "-dapr-http-port", "3501",
-      "-dapr-grpc-port", "50002",
-      "-resources-path", "/components",
-      "-config", "/config/config.yaml"
-    ]
-    volumes:
-      - ./dapr/components:/components
-      - ./dapr:/config
-    deploy:
-      resources:
-        limits:
-          cpus: '0.25'
-          memory: 128M
-    depends_on:
-      listener-api:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    networks:
-      - payroll-network
 
   # PayrollPro Client Frontend
   payrollpro-client:
