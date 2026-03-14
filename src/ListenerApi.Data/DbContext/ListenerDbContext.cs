@@ -30,10 +30,13 @@ public class ListenerDbContext : Microsoft.EntityFrameworkCore.DbContext
         modelBuilder.Entity<EmployeePayAttributes>(entity =>
         {
             entity.HasKey(e => e.EmployeeId);
+            // No FK constraint — this is an eventually-consistent read model where
+            // net pay events may arrive before employee events (different Kafka partitions).
+            // Navigation property is kept for GraphQL query convenience only.
             entity.HasOne(e => e.Employee)
                   .WithOne(e => e.PayAttributes)
                   .HasForeignKey<EmployeePayAttributes>(e => e.EmployeeId)
-                  .OnDelete(DeleteBehavior.Cascade);
+                  .OnDelete(DeleteBehavior.NoAction);
             entity.Property(e => e.GrossPay).HasPrecision(18, 2);
             entity.Property(e => e.FederalTax).HasPrecision(18, 2);
             entity.Property(e => e.StateTax).HasPrecision(18, 2);
@@ -55,10 +58,11 @@ public class ListenerDbContext : Microsoft.EntityFrameworkCore.DbContext
         modelBuilder.Entity<TransferRecord>(entity =>
         {
             entity.HasKey(e => e.Id);
+            // No FK constraint — transfer events may arrive before employee events.
             entity.HasOne(e => e.Employee)
                   .WithMany()
                   .HasForeignKey(e => e.EmployeeId)
-                  .OnDelete(DeleteBehavior.Cascade);
+                  .OnDelete(DeleteBehavior.NoAction);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
             entity.Property(e => e.FailureReason).HasMaxLength(500);
