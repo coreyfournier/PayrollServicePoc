@@ -49,7 +49,7 @@ public class TransfersController : ControllerBase
     {
         var transferId = Guid.NewGuid();
 
-        await _publishEndpoint.Publish(new InitiateTransferMessage(
+        await _publishEndpoint.Publish(new TransferRequested(
             transferId, dto.EmployeeId, dto.Amount, dto.PayPeriodNumber, dto.BankAccountId));
 
         return Accepted(new TransferInitiateResult(true, transferId, null));
@@ -113,7 +113,7 @@ public class TransfersController : ControllerBase
         var sagaState = await _sagaCollection.Find(s => s.CorrelationId == id).FirstOrDefaultAsync();
         var employeeId = sagaState?.EmployeeId ?? Guid.Empty;
 
-        await _publishEndpoint.Publish(new AcceptBalanceMessage(id, employeeId, dto.Accepted));
+        await _publishEndpoint.Publish(new BalanceAccepted(id, employeeId, dto.Accepted));
         return Ok();
     }
 }

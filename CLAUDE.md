@@ -279,12 +279,18 @@ Key files: `src/ListenerApi.Data/Entities/OutboxMessage.cs`, `src/ListenerApi/Co
 
 See `docs/transfer-outbox-options.md` for the full comparison of approaches evaluated and outbox cleanup details.
 
+**Messages** (defined in `src/TransferService.Application/Messages/TransferMessages.cs`):
+- `TransferRequested` — published when a transfer is initiated (via outbox or direct API)
+- `BalanceAccepted` — published when a user accepts/rejects an insufficient balance
+- `ConfirmationTimedOut` — scheduled by the saga, fires after 24h if balance not confirmed
+- `RetryBankTransfer` — scheduled by the saga for exponential backoff retries (2s, 4s, 8s)
+
 **End-to-End Data Flow:**
 ```
 Client (REST/GraphQL)
   │
   ├─► Direct: POST transfer-api:5002/api/Transfers
-  │     └─► TransferStateMachine (saga keyed by transferId)
+  │     └─► Publishes TransferRequested → TransferStateMachine (saga keyed by transferId)
   │           ├─ Validate bank account ownership
   │           ├─ Check transfer limits (daily/period count/amount)
   │           ├─ Create Transfer entity → MassTransitUnitOfWork
@@ -292,20 +298,20 @@ Client (REST/GraphQL)
   │           │    └─ Kafka publish (transfer-events)
   │           └─ Saga transitions through states
   │
-  └─► Async: ListenerApi (Debezium Outbox) → Kafka (transfer-requests) → TransferRequestConsumer
-        └─► Same saga path as above
+  └─► Async: ListenerApi (Debezium Outbox) → Kafka (transfer-requests)
+        └─► TransferRequestConsumer publishes TransferRequested → same saga path
 
-TransferStateMachine (MassTransit Saga):
+TransferStateMachine (src/TransferService.Api/Sagas/TransferStateMachine.cs):
   States: Submitted → BalanceVerified | AwaitingConfirmation → Processing → Completed | Failed
 
-  1. Submitted — verify transfer exists, query ksqlDB for employee net pay
+  1. TransferRequested → Submitted — validate, query ksqlDB for employee net pay
   │   ├─ Balance sufficient → BalanceVerified
   │   └─ Balance insufficient → AwaitingConfirmation
-  │       └─ Schedule 24h timeout via MassTransit Schedule<>
-  │           ├─ BalanceAccepted event → BalanceVerified
-  │           └─ Timeout/BalanceRejected → Failed
+  │       └─ Schedule ConfirmationTimedOut (24h) via MassTransit Schedule<>
+  │           ├─ BalanceAccepted (accepted=true) → BalanceVerified
+  │           └─ BalanceAccepted (accepted=false) / ConfirmationTimedOut → Failed
   2. BalanceVerified → Processing — call SimulatedBankService
-  │   └─ Retry up to 3x with exponential backoff via scheduled messages (2s, 4s, 8s)
+  │   └─ On failure: schedule RetryBankTransfer (up to 3x, exponential backoff)
   3. Processing → Completed or Failed
   │
   Each state change → MassTransitUnitOfWork → Kafka (transfer-events)
@@ -346,12 +352,13 @@ TransferStateMachine (MassTransit Saga):
 - `transfer-api` (port 5002) — TransferService.Api container, depends on MongoDB and Kafka.
 
 **Key Files:**
+- `src/TransferService.Application/Messages/TransferMessages.cs` — all transfer events: `TransferRequested`, `BalanceAccepted`, `ConfirmationTimedOut`, `RetryBankTransfer`
 - `src/TransferService.Api/Sagas/TransferStateMachine.cs` — MassTransit saga state machine for transfer orchestration
 - `src/TransferService.Api/Sagas/TransferState.cs` — saga state entity
-- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — consumes transfer-requests from Kafka
+- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — consumes transfer-requests from Kafka, publishes `TransferRequested` / `BalanceAccepted`
 - `src/TransferService.Infrastructure/ExternalServices/SimulatedBankService.cs` — simulated bank
 - `src/TransferService.Infrastructure/ExternalServices/KsqlDbBalanceService.cs` — ksqlDB balance queries
-- `src/ListenerApi/Controllers/TransferController.cs` — async command initiation + queries
+- `src/ListenerApi/Controllers/TransferController.cs` — async transfer initiation via Debezium outbox + queries
 
 ### Kafka Topics (Transfers)
 
@@ -374,9 +381,10 @@ TransferStateMachine (MassTransit Saga):
 - `src/ElasticsearchUpdater/` — Kafka consumer Java app combining employee info + net pay for Elasticsearch
 - `docker/Dockerfile.kafka-connect` — Kafka Connect image with Elasticsearch connector
 - `src/TransferService.Api/Program.cs` — TransferService DI, MassTransit saga registration
+- `src/TransferService.Application/Messages/TransferMessages.cs` — `TransferRequested`, `BalanceAccepted`, `ConfirmationTimedOut`, `RetryBankTransfer`
 - `src/TransferService.Api/Sagas/TransferStateMachine.cs` — MassTransit saga for transfer orchestration
 - `src/TransferService.Api/Sagas/TransferState.cs` — saga state entity
-- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — transfer request consumer
+- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — consumes from Kafka, publishes `TransferRequested` / `BalanceAccepted`
 - `src/TransferService.Domain/Entities/Transfer.cs` — transfer domain entity
 - `src/TransferService.Domain/Entities/BankAccount.cs` — bank account domain entity
 - `src/TransferService.Infrastructure/DependencyInjection.cs` — transfer infrastructure registration

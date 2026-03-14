@@ -87,14 +87,14 @@ public class TransferRequestConsumer : IConsumer<TransferRequestMessage>
                 return;
             }
 
-            await _publishEndpoint.Publish(new AcceptBalanceMessage(
+            await _publishEndpoint.Publish(new BalanceAccepted(
                 message.TransferId.Value, message.EmployeeId, message.Accepted));
         }
         else
         {
             var transferId = message.TransferId ?? Guid.NewGuid();
 
-            await _publishEndpoint.Publish(new InitiateTransferMessage(
+            await _publishEndpoint.Publish(new TransferRequested(
                 transferId, message.EmployeeId, message.Amount, message.PayPeriodNumber, message.BankAccountId));
         }
     }

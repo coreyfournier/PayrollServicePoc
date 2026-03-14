@@ -14,8 +14,8 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
     public State Completed { get; private set; } = default!;
     public State Failed { get; private set; } = default!;
 
-    public Event<InitiateTransferMessage> InitiateTransfer { get; private set; } = default!;
-    public Event<AcceptBalanceMessage> AcceptBalance { get; private set; } = default!;
+    public Event<TransferRequested> InitiateTransfer { get; private set; } = default!;
+    public Event<BalanceAccepted> AcceptBalance { get; private set; } = default!;
     public Event<RetryBankTransfer> RetryBankTransferEvent { get; private set; } = default!;
 
     public Schedule<TransferState, ConfirmationTimedOut> ConfirmationTimeout { get; private set; } = default!;
