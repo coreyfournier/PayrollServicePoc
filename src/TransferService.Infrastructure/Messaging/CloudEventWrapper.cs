@@ -21,7 +21,7 @@ public class CloudEventWrapper
     public string DataContentType { get; set; } = "application/json";
 
     [JsonPropertyName("data")]
-    public string Data { get; set; } = string.Empty;
+    public JsonElement Data { get; set; }
 
     [JsonPropertyName("time")]
     public string Time { get; set; } = DateTime.UtcNow.ToString("O");
@@ -29,7 +29,7 @@ public class CloudEventWrapper
     [JsonPropertyName("traceid")]
     public string TraceId { get; set; } = string.Empty;
 
-    public static CloudEventWrapper Create(string data)
+    public static CloudEventWrapper Create(JsonElement data)
     {
         return new CloudEventWrapper
         {

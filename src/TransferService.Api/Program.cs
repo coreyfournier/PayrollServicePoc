@@ -44,6 +44,13 @@ builder.Services.AddSingleton<IMongoDatabase>(sp =>
 
 var kafkaBootstrapServers = builder.Configuration.GetValue<string>("Kafka:BootstrapServers") ?? "kafka:9092";
 
+// Register Confluent.Kafka producer for direct Kafka publishing (CloudEvent format)
+builder.Services.AddSingleton<Confluent.Kafka.IProducer<string, string>>(sp =>
+{
+    var config = new Confluent.Kafka.ProducerConfig { BootstrapServers = kafkaBootstrapServers };
+    return new Confluent.Kafka.ProducerBuilder<string, string>(config).Build();
+});
+
 builder.Services.AddMassTransit(x =>
 {
     x.AddSagaStateMachine<TransferStateMachine, TransferState>()
@@ -63,14 +70,15 @@ builder.Services.AddMassTransit(x =>
     {
         rider.AddConsumer<TransferRequestConsumer>();
 
-        rider.AddProducer<string, string>("transfer-events");
-
         rider.UsingKafka((context, k) =>
         {
             k.Host(kafkaBootstrapServers);
 
-            k.TopicEndpoint<TransferRequestMessage>("transfer-requests", "transfer-service-group", e =>
+            k.TopicEndpoint<string, TransferRequestMessage>("transfer-requests", "transfer-service-group", e =>
             {
+                e.SetKeyDeserializer(Confluent.Kafka.Deserializers.Utf8);
+                e.SetValueDeserializer(new RawStringDeserializer<TransferRequestMessage>(
+                    (msg, val) => msg.Value = val));
                 e.ConfigureConsumer<TransferRequestConsumer>(context);
             });
         });

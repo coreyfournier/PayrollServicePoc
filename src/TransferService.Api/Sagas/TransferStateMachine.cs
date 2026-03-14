@@ -9,22 +9,13 @@ namespace TransferService.Api.Sagas;
 
 public class TransferStateMachine : MassTransitStateMachine<TransferState>
 {
-    public State Validating { get; private set; } = default!;
-    public State VerifyingBalance { get; private set; } = default!;
     public State AwaitingConfirmation { get; private set; } = default!;
     public State Processing { get; private set; } = default!;
     public State Completed { get; private set; } = default!;
     public State Failed { get; private set; } = default!;
 
     public Event<InitiateTransferMessage> InitiateTransfer { get; private set; } = default!;
-    public Event<TransferValidated> TransferValidatedEvent { get; private set; } = default!;
-    public Event<TransferValidationFailed> TransferValidationFailedEvent { get; private set; } = default!;
-    public Event<BalanceVerified> BalanceVerifiedEvent { get; private set; } = default!;
-    public Event<BalanceInsufficient> BalanceInsufficientEvent { get; private set; } = default!;
     public Event<AcceptBalanceMessage> AcceptBalance { get; private set; } = default!;
-    public Event<ConfirmationTimedOut> ConfirmationTimedOutEvent { get; private set; } = default!;
-    public Event<BankTransferCompleted> BankTransferCompletedEvent { get; private set; } = default!;
-    public Event<BankTransferFailed> BankTransferFailedEvent { get; private set; } = default!;
     public Event<RetryBankTransfer> RetryBankTransferEvent { get; private set; } = default!;
 
     public Schedule<TransferState, ConfirmationTimedOut> ConfirmationTimeout { get; private set; } = default!;
@@ -34,14 +25,7 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
         InstanceState(x => x.CurrentState);
 
         Event(() => InitiateTransfer, x => x.CorrelateById(ctx => ctx.Message.TransferId));
-        Event(() => TransferValidatedEvent, x => x.CorrelateById(ctx => ctx.Message.TransferId));
-        Event(() => TransferValidationFailedEvent, x => x.CorrelateById(ctx => ctx.Message.TransferId));
-        Event(() => BalanceVerifiedEvent, x => x.CorrelateById(ctx => ctx.Message.TransferId));
-        Event(() => BalanceInsufficientEvent, x => x.CorrelateById(ctx => ctx.Message.TransferId));
         Event(() => AcceptBalance, x => x.CorrelateById(ctx => ctx.Message.TransferId));
-        Event(() => ConfirmationTimedOutEvent, x => x.CorrelateById(ctx => ctx.Message.TransferId));
-        Event(() => BankTransferCompletedEvent, x => x.CorrelateById(ctx => ctx.Message.TransferId));
-        Event(() => BankTransferFailedEvent, x => x.CorrelateById(ctx => ctx.Message.TransferId));
         Event(() => RetryBankTransferEvent, x => x.CorrelateById(ctx => ctx.Message.TransferId));
 
         Schedule(() => ConfirmationTimeout, instance => instance.ConfirmationTimeoutTokenId, s =>
@@ -59,11 +43,12 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                     ctx.Saga.PayPeriodNumber = ctx.Message.PayPeriodNumber;
                     ctx.Saga.BankAccountId = ctx.Message.BankAccountId;
                 })
-                .TransitionTo(Validating)
                 .ThenAsync(async ctx =>
                 {
-                    var sp = GetServiceProvider(ctx);
-                    var validationService = sp.GetRequiredService<ITransferValidationService>();
+                    using var scope = CreateScope(ctx);
+
+                    // Validate
+                    var validationService = scope.ServiceProvider.GetRequiredService<ITransferValidationService>();
                     var result = await validationService.ValidateAsync(
                         new TransferValidationRequest(
                             ctx.Saga.EmployeeId,
@@ -71,117 +56,81 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                             ctx.Saga.PayPeriodNumber,
                             ctx.Saga.BankAccountId));
 
-                    if (result.CanTransfer)
-                        await ctx.Publish(new TransferValidated(ctx.Saga.CorrelationId));
-                    else
-                        await ctx.Publish(new TransferValidationFailed(ctx.Saga.CorrelationId, string.Join(" ", result.Reasons)));
-                })
-        );
+                    if (!result.CanTransfer)
+                    {
+                        ctx.Saga.FailureReason = string.Join(" ", result.Reasons);
+                        ctx.Saga.ValidationFailed = true;
+                        return;
+                    }
 
-        During(Validating,
-            When(TransferValidatedEvent)
-                .TransitionTo(VerifyingBalance)
-                .ThenAsync(async ctx =>
-                {
-                    var sp = GetServiceProvider(ctx);
-                    var balanceService = sp.GetRequiredService<IBalanceService>();
+                    // Balance check
+                    var balanceService = scope.ServiceProvider.GetRequiredService<IBalanceService>();
                     var balance = await balanceService.GetCurrentBalanceAsync(ctx.Saga.EmployeeId, ctx.Saga.PayPeriodNumber);
 
-                    if (balance == null || balance.NetPay >= ctx.Saga.Amount)
+                    if (balance != null && balance.NetPay < ctx.Saga.Amount)
                     {
-                        var currentBalance = balance?.NetPay ?? 0;
-                        await ctx.Publish(new BalanceVerified(ctx.Saga.CorrelationId, currentBalance));
+                        ctx.Saga.CurrentBalance = balance.NetPay;
+                        ctx.Saga.BalanceInsufficient = true;
                     }
                     else
                     {
-                        await ctx.Publish(new BalanceInsufficient(ctx.Saga.CorrelationId, balance.NetPay));
+                        ctx.Saga.CurrentBalance = balance?.NetPay ?? 0;
                     }
-                }),
-            When(TransferValidationFailedEvent)
-                .TransitionTo(Failed)
-                .ThenAsync(async ctx =>
-                {
-                    ctx.Saga.FailureReason = ctx.Message.Reason;
-                    var sp = GetServiceProvider(ctx);
-                    var publisher = sp.GetRequiredService<ITransferEventPublisher>();
-                    var repo = sp.GetRequiredService<ITransferRepository>();
-
-                    var transfer = Transfer.Create(
-                        ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.CorrelationId);
-                    transfer.MarkFailed(ctx.Message.Reason);
-                    await repo.AddAsync(transfer);
-                    await publisher.PublishAsync(transfer);
                 })
-                .Finalize()
-        );
+                .IfElse(ctx => ctx.Saga.ValidationFailed,
+                    failed => failed
+                        .TransitionTo(Failed)
+                        .ThenAsync(async ctx =>
+                        {
+                            using var scope = CreateScope(ctx);
+                            var publisher = scope.ServiceProvider.GetRequiredService<ITransferEventPublisher>();
+                            var repo = scope.ServiceProvider.GetRequiredService<ITransferRepository>();
 
-        During(VerifyingBalance,
-            When(BalanceVerifiedEvent)
-                .TransitionTo(Processing)
-                .ThenAsync(async ctx =>
-                {
-                    ctx.Saga.CurrentBalance = ctx.Message.CurrentBalance;
-                    var sp = GetServiceProvider(ctx);
-                    var publisher = sp.GetRequiredService<ITransferEventPublisher>();
-                    var repo = sp.GetRequiredService<ITransferRepository>();
+                            var transfer = Transfer.Create(
+                                ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.CorrelationId);
+                            transfer.MarkFailed(ctx.Saga.FailureReason!);
+                            await repo.AddAsync(transfer);
+                            await publisher.PublishAsync(transfer);
+                        })
+                        .Finalize(),
+                    passed => passed
+                        .IfElse(ctx => ctx.Saga.BalanceInsufficient,
+                            insufficient => insufficient
+                                .TransitionTo(AwaitingConfirmation)
+                                .ThenAsync(async ctx =>
+                                {
+                                    using var scope = CreateScope(ctx);
+                                    var publisher = scope.ServiceProvider.GetRequiredService<ITransferEventPublisher>();
+                                    var repo = scope.ServiceProvider.GetRequiredService<ITransferRepository>();
 
-                    var transfer = Transfer.Create(
-                        ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.CorrelationId);
-                    transfer.MarkProcessing();
-                    await repo.AddAsync(transfer);
-                    await publisher.PublishAsync(transfer);
-
-                    // Execute bank transfer
-                    await ExecuteBankTransfer(ctx);
-                }),
-            When(BalanceInsufficientEvent)
-                .TransitionTo(AwaitingConfirmation)
-                .ThenAsync(async ctx =>
-                {
-                    ctx.Saga.CurrentBalance = ctx.Message.CurrentBalance;
-                    var sp = GetServiceProvider(ctx);
-                    var publisher = sp.GetRequiredService<ITransferEventPublisher>();
-                    var repo = sp.GetRequiredService<ITransferRepository>();
-
-                    var transfer = Transfer.Create(
-                        ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.CorrelationId);
-                    transfer.MarkAwaitingConfirmation(ctx.Message.CurrentBalance);
-                    await repo.AddAsync(transfer);
-                    await publisher.PublishAsync(transfer);
-                })
-                .Schedule(ConfirmationTimeout, ctx => ctx.Init<ConfirmationTimedOut>(new ConfirmationTimedOut(ctx.Saga.CorrelationId)))
+                                    var transfer = Transfer.Create(
+                                        ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.CorrelationId);
+                                    transfer.MarkAwaitingConfirmation(ctx.Saga.CurrentBalance!.Value);
+                                    await repo.AddAsync(transfer);
+                                    await publisher.PublishAsync(transfer);
+                                })
+                                .Schedule(ConfirmationTimeout, ctx => ctx.Init<ConfirmationTimedOut>(new ConfirmationTimedOut(ctx.Saga.CorrelationId))),
+                            sufficient => sufficient
+                                .TransitionTo(Processing)
+                                .ThenAsync(async ctx => await ExecuteBankTransferInline(ctx))
+                        )
+                )
         );
 
         During(AwaitingConfirmation,
             When(AcceptBalance, ctx => ctx.Message.Accepted)
                 .Unschedule(ConfirmationTimeout)
                 .TransitionTo(Processing)
-                .ThenAsync(async ctx =>
-                {
-                    var sp = GetServiceProvider(ctx);
-                    var publisher = sp.GetRequiredService<ITransferEventPublisher>();
-                    var repo = sp.GetRequiredService<ITransferRepository>();
-
-                    var transfer = await repo.GetByIdAsync(ctx.Saga.CorrelationId);
-                    if (transfer != null)
-                    {
-                        transfer.MarkProcessing();
-                        await repo.UpdateAsync(transfer);
-                        await publisher.PublishAsync(transfer);
-                    }
-
-                    // Execute bank transfer
-                    await ExecuteBankTransfer(ctx);
-                }),
+                .ThenAsync(async ctx => await ExecuteBankTransferInline(ctx)),
             When(AcceptBalance, ctx => !ctx.Message.Accepted)
                 .Unschedule(ConfirmationTimeout)
                 .TransitionTo(Failed)
                 .ThenAsync(async ctx =>
                 {
                     ctx.Saga.FailureReason = "Transfer rejected by user.";
-                    var sp = GetServiceProvider(ctx);
-                    var publisher = sp.GetRequiredService<ITransferEventPublisher>();
-                    var repo = sp.GetRequiredService<ITransferRepository>();
+                    using var scope = CreateScope(ctx);
+                    var publisher = scope.ServiceProvider.GetRequiredService<ITransferEventPublisher>();
+                    var repo = scope.ServiceProvider.GetRequiredService<ITransferRepository>();
 
                     var transfer = await repo.GetByIdAsync(ctx.Saga.CorrelationId);
                     if (transfer != null)
@@ -192,14 +141,14 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                     }
                 })
                 .Finalize(),
-            When(ConfirmationTimedOutEvent)
+            When(ConfirmationTimeout.Received)
                 .TransitionTo(Failed)
                 .ThenAsync(async ctx =>
                 {
                     ctx.Saga.FailureReason = "Transfer auto-cancelled: balance change not accepted within 24 hours.";
-                    var sp = GetServiceProvider(ctx);
-                    var publisher = sp.GetRequiredService<ITransferEventPublisher>();
-                    var repo = sp.GetRequiredService<ITransferRepository>();
+                    using var scope = CreateScope(ctx);
+                    var publisher = scope.ServiceProvider.GetRequiredService<ITransferEventPublisher>();
+                    var repo = scope.ServiceProvider.GetRequiredService<ITransferRepository>();
 
                     var transfer = await repo.GetByIdAsync(ctx.Saga.CorrelationId);
                     if (transfer != null)
@@ -212,75 +161,68 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                 .Finalize()
         );
 
+        // Processing state: only entered via scheduled retries
         During(Processing,
-            When(BankTransferCompletedEvent)
-                .TransitionTo(Completed)
-                .ThenAsync(async ctx =>
-                {
-                    ctx.Saga.ExternalReferenceId = ctx.Message.ExternalReferenceId;
-                    var sp = GetServiceProvider(ctx);
-                    var publisher = sp.GetRequiredService<ITransferEventPublisher>();
-                    var repo = sp.GetRequiredService<ITransferRepository>();
-
-                    var transfer = await repo.GetByIdAsync(ctx.Saga.CorrelationId);
-                    if (transfer != null)
-                    {
-                        transfer.MarkCompleted(ctx.Message.ExternalReferenceId);
-                        await repo.UpdateAsync(transfer);
-                        await publisher.PublishAsync(transfer);
-                    }
-                })
-                .Finalize(),
-            When(BankTransferFailedEvent)
-                .TransitionTo(Failed)
-                .ThenAsync(async ctx =>
-                {
-                    ctx.Saga.FailureReason = ctx.Message.Reason;
-                    var sp = GetServiceProvider(ctx);
-                    var publisher = sp.GetRequiredService<ITransferEventPublisher>();
-                    var repo = sp.GetRequiredService<ITransferRepository>();
-
-                    var transfer = await repo.GetByIdAsync(ctx.Saga.CorrelationId);
-                    if (transfer != null)
-                    {
-                        transfer.MarkFailed(ctx.Message.Reason);
-                        await repo.UpdateAsync(transfer);
-                        await publisher.PublishAsync(transfer);
-                    }
-                })
-                .Finalize(),
             When(RetryBankTransferEvent)
-                .ThenAsync(async ctx => await ExecuteBankTransfer(ctx))
+                .ThenAsync(async ctx => await ExecuteBankTransferInline(ctx))
         );
 
         SetCompletedWhenFinalized();
     }
 
-    private static IServiceProvider GetServiceProvider<TSaga, TMessage>(BehaviorContext<TSaga, TMessage> ctx)
-        where TSaga : class, SagaStateMachineInstance
-        where TMessage : class
+    /// <summary>
+    /// Executes the bank transfer inline, handling the result directly
+    /// rather than publishing events (avoids in-memory bus timing issues).
+    /// On success: completes transfer and finalizes saga.
+    /// On failure with retries left: schedules a RetryBankTransfer.
+    /// On failure with no retries: fails transfer and finalizes saga.
+    /// </summary>
+    private static async Task ExecuteBankTransferInline<T>(BehaviorContext<TransferState, T> ctx) where T : class
     {
-        return ctx.GetPayload<IServiceProvider>();
-    }
+        using var scope = CreateScope(ctx);
+        var bankService = scope.ServiceProvider.GetRequiredService<IBankTransferService>();
+        var publisher = scope.ServiceProvider.GetRequiredService<ITransferEventPublisher>();
+        var repo = scope.ServiceProvider.GetRequiredService<ITransferRepository>();
 
-    private static async Task ExecuteBankTransfer<T>(BehaviorContext<TransferState, T> ctx) where T : class
-    {
-        var sp = ctx.GetPayload<IServiceProvider>();
-        var bankService = sp.GetRequiredService<IBankTransferService>();
+        // Ensure transfer entity exists (first attempt creates it, retries update it)
+        var transfer = await repo.GetByIdAsync(ctx.Saga.CorrelationId);
+        if (transfer == null)
+        {
+            transfer = Transfer.Create(
+                ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.CorrelationId);
+            transfer.MarkProcessing();
+            await repo.AddAsync(transfer);
+            await publisher.PublishAsync(transfer);
+        }
+        else if (transfer.Status != Domain.Enums.TransferStatus.Processing)
+        {
+            transfer.MarkProcessing();
+            await repo.UpdateAsync(transfer);
+            await publisher.PublishAsync(transfer);
+        }
+
         var result = await bankService.ExecuteTransferAsync(
             ctx.Saga.CorrelationId, ctx.Saga.Amount, ctx.Saga.BankAccountId);
 
         if (result.Success)
         {
-            await ctx.Publish(new BankTransferCompleted(ctx.Saga.CorrelationId, result.ExternalReferenceId!));
+            ctx.Saga.ExternalReferenceId = result.ExternalReferenceId;
+            transfer.MarkCompleted(result.ExternalReferenceId!);
+            await repo.UpdateAsync(transfer);
+            await publisher.PublishAsync(transfer);
+            await ctx.SetCompleted();
         }
         else
         {
             ctx.Saga.RetryCount++;
             if (ctx.Saga.RetryCount >= 3)
             {
-                await ctx.Publish(new BankTransferFailed(ctx.Saga.CorrelationId,
-                    result.ErrorMessage ?? "Bank transfer failed after all retries."));
+                var reason = result.ErrorMessage ?? "Bank transfer failed after all retries.";
+                ctx.Saga.FailureReason = reason;
+                transfer.MarkFailed(reason);
+                await repo.UpdateAsync(transfer);
+                await publisher.PublishAsync(transfer);
+                await ctx.SetCompleted();
             }
             else
             {
@@ -289,5 +231,13 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                 await ctx.SchedulePublish(delay, new RetryBankTransfer(ctx.Saga.CorrelationId));
             }
         }
+    }
+
+    private static IServiceScope CreateScope<TSaga, TMessage>(BehaviorContext<TSaga, TMessage> ctx)
+        where TSaga : class, SagaStateMachineInstance
+        where TMessage : class
+    {
+        var provider = ctx.GetPayload<IServiceProvider>();
+        return provider.CreateScope();
     }
 }

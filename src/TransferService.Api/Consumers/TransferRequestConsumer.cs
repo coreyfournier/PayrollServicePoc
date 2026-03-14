@@ -1,11 +1,39 @@
+using System.Text;
 using System.Text.Json;
+using Confluent.Kafka;
 using MassTransit;
 using Microsoft.Extensions.Logging;
 using TransferService.Application.Messages;
 
 namespace TransferService.Api.Consumers;
 
-public record TransferRequestMessage
+public class TransferRequestMessage
+{
+    public string Value { get; set; } = string.Empty;
+}
+
+public class RawStringDeserializer<T> : IDeserializer<T>
+    where T : new()
+{
+    private readonly Action<T, string> _valueSetter;
+
+    public RawStringDeserializer(Action<T, string> valueSetter)
+    {
+        _valueSetter = valueSetter;
+    }
+
+    public T Deserialize(ReadOnlySpan<byte> data, bool isNull, SerializationContext context)
+    {
+        var msg = new T();
+        if (!isNull && data.Length > 0)
+        {
+            _valueSetter(msg, Encoding.UTF8.GetString(data));
+        }
+        return msg;
+    }
+}
+
+public record TransferRequestPayload
 {
     public string? Action { get; init; }
     public Guid EmployeeId { get; init; }
@@ -20,6 +48,10 @@ public class TransferRequestConsumer : IConsumer<TransferRequestMessage>
 {
     private readonly IPublishEndpoint _publishEndpoint;
     private readonly ILogger<TransferRequestConsumer> _logger;
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public TransferRequestConsumer(
         IPublishEndpoint publishEndpoint,
@@ -31,11 +63,21 @@ public class TransferRequestConsumer : IConsumer<TransferRequestMessage>
 
     public async Task Consume(ConsumeContext<TransferRequestMessage> context)
     {
-        var message = context.Message;
+        var raw = context.Message.Value;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            _logger.LogWarning("Received empty transfer request message");
+            return;
+        }
 
-        _logger.LogInformation(
-            "Received transfer request: Action={Action}, EmployeeId={EmployeeId}, Amount={Amount}",
-            message.Action, message.EmployeeId, message.Amount);
+        _logger.LogInformation("Received transfer request: {Raw}", raw);
+
+        var message = JsonSerializer.Deserialize<TransferRequestPayload>(raw, _jsonOptions);
+        if (message == null)
+        {
+            _logger.LogWarning("Failed to deserialize transfer request: {Raw}", raw);
+            return;
+        }
 
         if (string.Equals(message.Action, "accept-balance", StringComparison.OrdinalIgnoreCase))
         {
