@@ -49,11 +49,11 @@ public class TransferBalanceVerificationTests
         transfer.CurrentBalance.Should().NotBeNull();
         transfer.CurrentBalance.Should().BeLessThan(amount);
 
-        // Verify Dapr state
-        var daprState = await _fixture.Db.GetDaprTransferStateAsync(transferId);
-        daprState.Should().NotBeNull();
-        daprState!.RootElement.GetProperty("status").GetString().Should().Be("AwaitingConfirmation");
-        daprState.RootElement.GetProperty("currentBalance").GetDecimal()
+        // Verify MongoDB transfers collection
+        var transferState = await _fixture.Db.GetTransferStateAsync(transferId);
+        transferState.Should().NotBeNull();
+        transferState!.RootElement.GetProperty("status").GetString().Should().Be("AwaitingConfirmation");
+        transferState.RootElement.GetProperty("currentBalance").GetDecimal()
             .Should().Be(transfer.CurrentBalance!.Value);
 
         // Verify MySQL got the event

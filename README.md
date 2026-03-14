@@ -1,6 +1,6 @@
-# Dapr POC - Employee Payroll System
+# Employee Payroll System POC
 
-A proof of concept demonstrating Dapr with Kafka pub/sub, MongoDB state store, the transactional outbox pattern, ksqlDB stream processing for real-time pay period aggregation, Kafka Streams for net pay calculation, and Elasticsearch-powered employee search. Two independent frontends consume the API: a REST+React app and a GraphQL+WebSocket subscription client.
+A proof of concept demonstrating MassTransit with Kafka Rider, MongoDB transactional outbox, ksqlDB stream processing for real-time pay period aggregation, Kafka Streams for net pay calculation, and Elasticsearch-powered employee search. Two independent frontends consume the API: a REST+React app and a GraphQL+WebSocket subscription client.
 
 ## Architecture
 
@@ -8,32 +8,31 @@ This project follows Domain Driven Design (DDD) principles with the following la
 
 - **Domain Layer**: Contains entities, value objects, domain events, and repository interfaces
 - **Application Layer**: Contains DTOs, commands, queries, and handlers using MediatR
-- **Infrastructure Layer**: Contains MongoDB repositories, Dapr event publishing, and data seeding
+- **Infrastructure Layer**: Contains MongoDB repositories, MassTransit event publishing, and data seeding
 - **API Layer**: Contains ASP.NET Core controllers and Swagger documentation
 
-### Write Path (Dapr Outbox Mode)
+### Write Path (MassTransit Transactional Outbox)
 
-When `Features__UseDaprOutbox` is `true` (the default), writes follow a two-phase approach with the Dapr state store as the source of truth:
+Writes use the MassTransit MongoDB transactional outbox to atomically persist entity state and publish domain events:
 
 ```
 Controller → MediatR Handler → Entity (raises domain events)
-  → DaprStateStoreUnitOfWork.ExecuteAsync()
-      1. Dapr State Store Transaction  (entity + outbox — ATOMIC, SOURCE OF TRUTH)
-      2. MongoDB Collection Write      (read model — BEST-EFFORT)
+  → MongoDbUnitOfWork.ExecuteAsync()
+      MongoDB Transaction (entity + outbox messages — ATOMIC)
+        → MassTransit Outbox Delivery Service → Kafka (via Kafka Rider)
 ```
 
-- **Step 1 fails** → exception propagates, nothing is written anywhere → fully consistent.
-- **Step 2 fails** → entity is safely in the Dapr state store, `GetByIdAsync` still works (reads Dapr first), collection queries may be stale → acceptable trade-off for a POC.
-
-Repository `AddAsync` methods use `ReplaceOneAsync` with `IsUpsert = true` so that retries after a Dapr success don't produce duplicate-key errors in MongoDB.
+- Entity state and outbox messages are written in a single MongoDB transaction — if it fails, nothing is written.
+- The MassTransit outbox delivery service picks up pending messages and publishes them to Kafka via the Kafka Rider.
+- This eliminates the dual-write problem: events are guaranteed to publish if the entity persists.
 
 ## Hours Worked → Net Pay
 
-The end-to-end pipeline from clock-out to net pay spans Dapr, Kafka, ksqlDB, and a Kafka Streams application:
+The end-to-end pipeline from clock-out to net pay spans MassTransit, Kafka, ksqlDB, and a Kafka Streams application:
 
 ```
 Clock-Out / Time Entry Update
-  → employee-events (Kafka, via Dapr outbox)
+  → employee-events (Kafka, via MassTransit outbox)
     → ksqlDB: TIME_ENTRY_EVENTS stream
         (filters clock-out/update events, computes bi-weekly pay period number)
       → ksqlDB: EMPLOYEE_HOURS_BY_PERIOD table
@@ -50,7 +49,7 @@ Clock-Out / Time Entry Update
               State tax: flat rate by state
               Deductions: fixed amount or percentage of gross
             → employee-net-pay topic
-              → ListenerApi (Dapr subscription) → GraphQL subscription → UI
+              → ListenerApi (MassTransit Kafka consumer) → GraphQL subscription → UI
               → Elasticsearch Updater → employee-search topic → ES index → Search UI
 ```
 
@@ -67,15 +66,14 @@ Clock-Out / Time Entry Update
 - **Tax Information**: Federal and state tax withholding configuration
 - **Deductions**: Various payroll deductions (health, dental, 401k, etc.)
 - **Real-Time Pay Calculation**: End-to-end pipeline from clock-out through gross pay to net pay via ksqlDB and Kafka Streams
-- **Event-Driven**: All data changes trigger domain events published to Kafka via Dapr
-- **Transactional Consistency**: Dapr state store is the authoritative write path — entity state and outbox events are written atomically. MongoDB collections serve as a best-effort read model updated after the Dapr transaction succeeds.
+- **Event-Driven**: All data changes trigger domain events published to Kafka via MassTransit Kafka Rider
+- **Transactional Consistency**: MassTransit MongoDB transactional outbox writes entity state and outbox messages atomically in a single MongoDB transaction. The outbox delivery service publishes events to Kafka reliably.
 - **Elasticsearch Search**: Full-text search with filter chips and an advanced query builder (AND/OR groups, nested field support) powered by Elasticsearch
 
 ## Prerequisites
 
 - Docker and Docker Compose
 - .NET 7.0 SDK (for local development)
-- Dapr CLI (optional, for local debugging)
 
 ## Quick Start
 
@@ -101,7 +99,7 @@ Clock-Out / Time Entry Update
 
 ## Listener API & PayrollPro Client
 
-The **Listener API** (`src/ListenerApi`) is a .NET 7.0 GraphQL server (HotChocolate) backed by MySQL. It subscribes to the `employee-events` and `employee-net-pay` Kafka topics via Dapr and persists employee records and pay attributes to its own database, demonstrating an event-driven read model. Events are processed idempotently using timestamp comparison. It exposes:
+The **Listener API** (`src/ListenerApi`) is a .NET 7.0 GraphQL server (HotChocolate) backed by MySQL. It subscribes to the `employee-events` and `employee-net-pay` Kafka topics via MassTransit Kafka Rider and persists employee records and pay attributes to its own database, demonstrating an event-driven read model. Events are processed idempotently using timestamp comparison. It exposes:
 
 - **GraphQL queries** — fetch employee records from MySQL
 - **GraphQL mutations** — manage records (e.g., delete all)
@@ -112,7 +110,7 @@ The **PayrollPro Client** (`payrollProClient/`) is a React + Vite frontend that 
 - **Change Stream** — a live feed of employee changes pushed via GraphQL WebSocket subscriptions in real time
 - **Employee Records** — a queryable list of all employee records stored in the Listener API's MySQL database
 
-Together, they demonstrate an end-to-end event-driven pipeline: REST API mutation → domain event → Kafka → Dapr subscription → MySQL projection → GraphQL subscription → real-time UI update.
+Together, they demonstrate an end-to-end event-driven pipeline: REST API mutation → domain event → Kafka → MassTransit consumer → MySQL projection → GraphQL subscription → real-time UI update.
 
 ## ksqlDB Stream Processing
 
@@ -122,7 +120,7 @@ ksqlDB processes the `employee-events` Kafka topic through a pipeline of streams
 
 | Object | Source | Description |
 |--------|--------|-------------|
-| `EMPLOYEE_EVENTS_RAW` | `employee-events` topic | Base stream over the raw CloudEvent envelope. `data` is VARCHAR (not STRUCT) because Dapr's outbox stringifies the JSON payload. Fields are extracted via `EXTRACTJSONFIELD` with PascalCase names |
+| `EMPLOYEE_EVENTS_RAW` | `employee-events` topic | Base stream over the raw event envelope. `data` is VARCHAR (not STRUCT) because the outbox stringifies the JSON payload. Fields are extracted via `EXTRACTJSONFIELD` with PascalCase names |
 | `TIME_ENTRY_EVENTS` | `EMPLOYEE_EVENTS_RAW` | Filtered for `timeentry.clockedout` and `timeentry.updated` events. Extracts time entry ID, employee ID, hours worked, and computes a bi-weekly pay period number from the clock-in timestamp |
 | `GROSS_PAY_EVENTS` | `EMPLOYEE_EVENTS_RAW` | Captures both employee events (pay rate/type changes) and time entry events. Normalizes employee ID via `COALESCE($.EmployeeId, $.Id)`. Uses `'__PAY_RATE__'` sentinel for employee events so they contribute 0 hours in the downstream dedup |
 | `EMPLOYEE_INFO_EVENTS` | `EMPLOYEE_EVENTS_RAW` | Filtered for `employee.*` events. Feeds the `EMPLOYEE_INFO` table for search indexing |
@@ -138,7 +136,7 @@ ksqlDB processes the `employee-events` Kafka topic through a pipeline of streams
 
 ## Net Pay Processor
 
-A standalone Kafka Streams application (Java 17) in `src/NetPayProcessor/` that computes per-employee, per-pay-period net pay by combining gross pay with tax configuration and deductions. Connects directly to Kafka (no Dapr sidecar needed).
+A standalone Kafka Streams application (Java 17) in `src/NetPayProcessor/` that computes per-employee, per-pay-period net pay by combining gross pay with tax configuration and deductions. Connects directly to Kafka.
 
 - **Inputs**: `employee-gross-pay` topic (from ksqlDB) + `employee-events` topic (taxinfo/deduction events)
 - **State stores**: `gross-pay-store`, `tax-config-store`, `deduction-store`
@@ -161,7 +159,7 @@ Three components work together to power the search experience:
 
 ## Transfer Service (Separate Bounded Context)
 
-The transfer feature is a fully independent bounded context (`TransferService.*`) demonstrating Dapr Actors, Dapr Workflows, the Debezium Outbox Pattern, and CDC-based command dispatch — all integrated through Kafka.
+The transfer feature is a fully independent bounded context (`TransferService.*`) demonstrating MassTransit Saga state machines, the Debezium Outbox Pattern, and CDC-based command dispatch — all integrated through Kafka.
 
 ### Architecture Overview
 
@@ -169,14 +167,14 @@ The transfer feature is a fully independent bounded context (`TransferService.*`
 PayrollPro Client / Frontend
     │
     ├─► Direct: POST transfer-api/api/Transfers
-    │     └─► TransferActor (Dapr, keyed by employeeId)
+    │     └─► MassTransit consumer → TransferSaga state machine
     │
     └─► Async: POST listener-api/api/Transfer
           └─► MySQL Transaction (TransferRecord + OutboxMessage)
-                └─► Debezium CDC → Kafka → TransferActor
+                └─► Debezium CDC → Kafka → TransferSaga state machine
 ```
 
-TransferService has its own MongoDB database (`transfer_db`), Dapr state store (`statestore-transfers`), and Dapr sidecar — completely independent of PayrollService.
+TransferService has its own MongoDB database (`transfer_db`) — completely independent of PayrollService.
 
 ### Debezium Outbox Pattern (Command Dispatch)
 
@@ -216,61 +214,59 @@ Debezium MySQL Source Connector (Kafka Connect)
 Kafka (transfer-requests topic)
   │
   ▼
-TransferService.Api (Dapr subscription on transfer-requests)
+TransferService.Api (MassTransit Kafka consumer on transfer-requests)
   │ Routes by Action field:
-  │   • null/missing → initiate transfer (via TransferActor)
-  │   • "accept-balance" → raise workflow event (BalanceAccepted)
+  │   • null/missing → initiate transfer (via TransferSaga)
+  │   • "accept-balance" → raise saga event (BalanceAccepted)
   ▼
-TransferActor / TransferWorkflow
+TransferSaga State Machine
 ```
 
-### Dapr Actors (Concurrency Control)
+### MassTransit Saga State Machine (Concurrency & Orchestration)
 
-`TransferActor` is keyed by `employeeId`. Dapr Actors guarantee **single-threaded execution per actor ID**, eliminating concurrent transfer races without manual locking. The actor:
+`TransferSaga` is a MassTransit saga state machine that manages the entire transfer lifecycle. The saga instance is correlated by `employeeId`, and MassTransit's MongoDB saga repository provides concurrency control — concurrent transfers for the same employee are serialized automatically.
+
+The saga handles:
 
 1. Validates bank account ownership
 2. Checks transfer limits (daily count, pay period count, pay period amount)
-3. Creates the Transfer entity atomically via `DaprTransferStateStoreUnitOfWork`
-4. Schedules the `TransferWorkflow`
+3. Creates the Transfer entity atomically via the MassTransit MongoDB transactional outbox
 
-### Dapr Workflow (Durable Orchestration)
-
-`TransferWorkflow` uses the Durable Task Framework to orchestrate the transfer lifecycle:
+The saga then orchestrates the transfer through its states:
 
 ```
-TransferWorkflow
-  1. ValidateTransferActivity      → verify transfer exists in state store
-  2. VerifyBalanceActivity         → query ksqlDB for employee's current net pay
-  │   ├─ Balance sufficient        → continue to step 3
-  │   └─ Balance insufficient      → MarkAwaitingConfirmationActivity
-  │       └─ WaitForExternalEvent("BalanceAccepted", 24h timeout)
-  │           ├─ Accepted          → continue to step 3
-  │           └─ Rejected/timeout  → FailTransferActivity
-  3. UpdateTransferStatusActivity  → mark as Processing
-  4. ExecuteBankTransferActivity   → call SimulatedBankService
-  │   └─ Retry up to 3× with exponential backoff (2s, 4s, 8s)
-  5. CompleteTransferActivity      → mark as Completed
-     or FailTransferActivity       → mark as Failed
+TransferSaga State Machine
+  Initiated
+    → VerifyBalance               → query ksqlDB for employee's current net pay
+    │   ├─ Balance sufficient     → transition to Processing
+    │   └─ Balance insufficient   → transition to AwaitingConfirmation
+    │       └─ BalanceAccepted event (24h timeout via scheduled message)
+    │           ├─ Accepted       → transition to Processing
+    │           └─ Rejected/timeout → transition to Failed
+  Processing
+    → ExecuteBankTransfer         → call SimulatedBankService
+    │   └─ Retry up to 3× with exponential backoff (2s, 4s, 8s)
+    → Completed or Failed
 ```
 
-Each state change writes atomically to the Dapr state store with outbox, publishing to the `transfer-events` Kafka topic. ListenerApi subscribes to `transfer-events` and updates the MySQL `TransferRecords` table, which feeds GraphQL subscriptions for real-time UI updates.
+Each state change publishes events to the `transfer-events` Kafka topic via the MassTransit outbox. ListenerApi subscribes to `transfer-events` and updates the MySQL `TransferRecords` table, which feeds GraphQL subscriptions for real-time UI updates.
 
 ### Transfer Limits
 
-Configurable via environment variables (`TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`). Enforced authoritatively by TransferService inside the actor. ListenerApi performs a best-effort pre-check from its materialized MySQL data. The `GET /api/transfers/employee/{id}/limits` endpoint returns current usage and a `canTransfer` boolean.
+Configurable via environment variables (`TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`). Enforced authoritatively by TransferService inside the saga. ListenerApi performs a best-effort pre-check from its materialized MySQL data. The `GET /api/transfers/employee/{id}/limits` endpoint returns current usage and a `canTransfer` boolean.
 
 ### Kafka Topics (Transfers)
 
 | Topic | Producer | Consumer | Description |
 |-------|----------|----------|-------------|
-| `transfer-requests` | Debezium CDC (from ListenerApi MySQL outbox) | TransferService.Api (Dapr subscription) | Commands: initiate transfer, accept/reject balance change |
-| `transfer-events` | TransferService.Api (Dapr state store outbox) | ListenerApi (Dapr subscription) | State changes: Initiated, AwaitingConfirmation, Processing, Completed, Failed |
+| `transfer-requests` | Debezium CDC (from ListenerApi MySQL outbox) | TransferService.Api (MassTransit Kafka consumer) | Commands: initiate transfer, accept/reject balance change |
+| `transfer-events` | TransferService.Api (MassTransit outbox) | ListenerApi (MassTransit Kafka consumer) | State changes: Initiated, AwaitingConfirmation, Processing, Completed, Failed |
 
 ### Two Databases
 
 | Database | Technology | Role | Written By |
 |----------|-----------|------|-----------|
-| `transfer_db` | MongoDB | Authoritative transfer & bank account data | TransferService via Dapr state store (atomic outbox) |
+| `transfer_db` | MongoDB | Authoritative transfer & bank account data | TransferService via MassTransit MongoDB transactional outbox |
 | `listener_db.TransferRecords` | MySQL | Client read model, GraphQL queries & subscriptions | ListenerApi (from `transfer-events` Kafka topic) |
 
 ### Outbox Cleanup
@@ -312,20 +308,18 @@ ListenerApi ─── MySQL Transaction ──┐
   │                                 │
   │                                 ▼
   │                     TransferService.Api
-  │                       TransferActor
+  │                       TransferSaga State Machine
   │                         │ validate → limits check → create
-  │                         ▼
-  │                       TransferWorkflow
   │                         │ verify balance → process → bank transfer
   │                         │
   │                         │ each state change →
-  │                         │   Dapr state store (atomic outbox)
+  │                         │   MassTransit MongoDB outbox
   │                         │     → Kafka: transfer-events
   │                         ▼
   │                     Kafka: transfer-events
   │                                 │
   │◄────────────────────────────────┘
-  │  Dapr subscription
+  │  MassTransit Kafka consumer
   │  UPDATE TransferRecord in MySQL
   │    Queued → Initiated → Processing → Completed
   │
@@ -378,17 +372,17 @@ GraphQL subscription → PayrollPro Client (real-time UI update)
 - `DELETE /api/deductions/{id}` - Deactivate deduction
 
 ### Transfers (transfer-api, port 5002)
-- `POST /api/transfers` - Initiate a transfer (via TransferActor)
+- `POST /api/transfers` - Initiate a transfer (via TransferSaga)
 - `GET /api/transfers/recent?limit=50&status=Processing` - Get recent transfers with optional status filter
 - `GET /api/transfers/employee/{employeeId}` - Get transfers for employee
 - `GET /api/transfers/{id}` - Get transfer by ID
-- `GET /api/transfers/{id}/workflow` - Get workflow state for a transfer
+- `GET /api/transfers/{id}/saga` - Get saga state for a transfer
 - `POST /api/transfers/{id}/accept` - Accept or reject a balance change (direct)
 - `GET /api/transfers/employee/{employeeId}/limits` - Get transfer limits and current usage
 
 ### Transfers (listener-api, port 5001 — async via outbox)
-- `POST /api/transfer` - Initiate a transfer (via Debezium outbox → Kafka → TransferActor)
-- `POST /api/transfer/{id}/accept` - Accept/reject balance change (via Debezium outbox → Kafka → workflow event)
+- `POST /api/transfer` - Initiate a transfer (via Debezium outbox → Kafka → TransferSaga)
+- `POST /api/transfer/{id}/accept` - Accept/reject balance change (via Debezium outbox → Kafka → saga event)
 - `GET /api/transfer/employee/{employeeId}` - Get transfers for employee (from MySQL read model)
 - `GET /api/transfer/employee/{employeeId}/limits` - Get transfer limits (best-effort pre-check)
 
@@ -403,17 +397,17 @@ The following topics are created by the `kafka-init` container on startup:
 
 | Topic | Producer | Description |
 |-------|----------|-------------|
-| `employee-events` | Dapr outbox (payroll-api) | All entity events (employee, time entry, tax info, deduction) published via Dapr's transactional outbox as CloudEvent envelopes with stringified JSON `data` |
-| `timeentry-events` | Dapr outbox (payroll-api) | Time entry create/update events (currently unused by downstream consumers) |
-| `taxinfo-events` | Dapr outbox (payroll-api) | Tax information create/update events (currently unused by downstream consumers) |
-| `deduction-events` | Dapr outbox (payroll-api) | Deduction create/update/deactivate events (currently unused by downstream consumers) |
+| `employee-events` | MassTransit outbox (payroll-api) | All entity events (employee, time entry, tax info, deduction) published via MassTransit MongoDB transactional outbox |
+| `timeentry-events` | MassTransit outbox (payroll-api) | Time entry create/update events (currently unused by downstream consumers) |
+| `taxinfo-events` | MassTransit outbox (payroll-api) | Tax information create/update events (currently unused by downstream consumers) |
+| `deduction-events` | MassTransit outbox (payroll-api) | Deduction create/update/deactivate events (currently unused by downstream consumers) |
 | `payperiod-hours-changed` | ksqlDB | Aggregated hours per employee per pay period, produced by the `EMPLOYEE_HOURS_BY_PERIOD` table |
 | `employee-gross-pay` | ksqlDB | Gross pay per employee per pay period (rate x hours), produced by the `EMPLOYEE_GROSS_PAY_BY_PERIOD` table |
 | `employee-net-pay` | NetPayProcessor | Net pay breakdown per employee per pay period (gross - taxes - deductions). Compacted topic |
 | `employee-info` | ksqlDB | Latest employee state per ID, produced by the `EMPLOYEE_INFO` table. Compacted topic |
 | `employee-search` | ElasticsearchUpdater | Combined employee + last 4 pay period documents for ES indexing. Compacted topic |
 | `transfer-requests` | Debezium CDC (ListenerApi MySQL outbox) | Transfer commands dispatched via CDC: initiate transfer and accept/reject balance change |
-| `transfer-events` | Dapr outbox (transfer-api) | Transfer state changes published via Dapr state store outbox (Initiated, AwaitingConfirmation, Processing, Completed, Failed) |
+| `transfer-events` | MassTransit outbox (transfer-api) | Transfer state changes published via MassTransit outbox (Initiated, AwaitingConfirmation, Processing, Completed, Failed) |
 
 Additional internal topics managed by ksqlDB (created/dropped by `ksqldb-init`):
 
@@ -442,10 +436,10 @@ Each employee has associated tax information and some have deductions configured
    docker-compose up -d zookeeper kafka kafka-init mongodb zipkin
    ```
 
-2. **Run the API with Dapr**:
+2. **Run the API**:
    ```bash
    cd src/PayrollService.Api
-   dapr run --app-id payroll-api --app-port 5000 --dapr-http-port 3500 --components-path ../../dapr/components --config ../../dapr/config.yaml -- dotnet run
+   dotnet run
    ```
 
 3. **Connect to MongoDB with Compass**:
@@ -464,14 +458,13 @@ DaprPoc/
 │   │   └── Program.cs
 │   ├── PayrollService.Application/   # MediatR CQRS (commands, queries, DTOs)
 │   ├── PayrollService.Domain/        # Entities, domain events, repository interfaces
-│   ├── PayrollService.Infrastructure/ # MongoDB persistence, Dapr state store, event publishing
-│   ├── TransferService.Api/          # Transfer API: Dapr Actors, Workflows, controllers
-│   │   ├── Actors/TransferActor.cs   # Dapr Actor (keyed by employeeId, concurrency control)
-│   │   └── Workflows/                # TransferWorkflow + 7 activities
+│   ├── PayrollService.Infrastructure/ # MongoDB persistence, MassTransit outbox, event publishing
+│   ├── TransferService.Api/          # Transfer API: MassTransit Saga, controllers
+│   │   └── Sagas/TransferSaga.cs     # MassTransit Saga state machine (concurrency + orchestration)
 │   ├── TransferService.Application/  # Transfer MediatR CQRS (commands, queries, DTOs)
 │   ├── TransferService.Domain/       # Transfer entities, value objects, repository interfaces
-│   ├── TransferService.Infrastructure/ # MongoDB persistence, Dapr state store, bank service
-│   ├── ListenerApi/                  # HotChocolate GraphQL server (MySQL, Dapr subscriptions)
+│   ├── TransferService.Infrastructure/ # MongoDB persistence, MassTransit outbox, bank service
+│   ├── ListenerApi/                  # HotChocolate GraphQL server (MySQL, MassTransit consumers)
 │   │   └── Controllers/TransferController.cs  # Debezium outbox command dispatch
 │   ├── ListenerApi.Data/             # EF Core entities and DbContext for ListenerApi
 │   │   └── Entities/OutboxMessage.cs # Debezium outbox entity
@@ -480,10 +473,6 @@ DaprPoc/
 ├── frontend/                         # React + Vite REST client
 │   └── src/components/search/        # Elasticsearch search UI (simple + advanced query builder)
 ├── payrollProClient/                 # React + Vite GraphQL subscription client
-├── dapr/
-│   ├── components/                   # Dapr component configs (state store, pub/sub)
-│   ├── components-transfer/          # Transfer-specific Dapr components (state store, pub/sub)
-│   └── config.yaml
 ├── docker/
 │   ├── Dockerfile                    # PayrollService.Api
 │   ├── Dockerfile.listenerapi        # ListenerApi
@@ -510,16 +499,16 @@ docker-compose down -v
 * Domains are not required to have high uptime.
 
 ## Subscriber Database Recovery
-1. Navigate to teh Employee Change Listner
+1. Navigate to the Employee Change Listener
 1. Choose Delete All Records
 1. Recover Employees
-   1. Stop `listener-api-dapr` container so it unsubscribes to kafka
-   1. In the Kafka UI http://localhost:8080/ui/clusters/payroll-cluster/consumer-groups/listener-api-group choose the elipse and Reset Offset to Earliest for all partitions and employee-events.
-   1. Start the container `listener-api-dapr` and watch new records get added.
+   1. Stop `listener-api` container so it unsubscribes from Kafka
+   1. In the Kafka UI http://localhost:8089/ui/clusters/payroll-cluster/consumer-groups/listener-api-group choose the ellipsis and Reset Offset to Earliest for all partitions and employee-events.
+   1. Start the container `listener-api` and watch new records get added.
 1. Recover net pay
-   1. Stop `listener-api-dapr` container so it unsubscribes to kafka
-   1. In the Kafka UI http://localhost:8080/ui/clusters/payroll-cluster/consumer-groups/listener-api-group choose the elipse and Reset Offset to Earliest for all partitions and employee-net-pay.
-   1. Start the container `listener-api-dapr` and watch the netpay get update on the employee.
+   1. Stop `listener-api` container so it unsubscribes from Kafka
+   1. In the Kafka UI http://localhost:8089/ui/clusters/payroll-cluster/consumer-groups/listener-api-group choose the ellipsis and Reset Offset to Earliest for all partitions and employee-net-pay.
+   1. Start the container `listener-api` and watch the net pay get updated on the employee.
 
 ## Event-Driven Read Model Projections
 * The same `employee-events` stream powers three independent read models (MongoDB for REST queries, MySQL for GraphQL, Elasticsearch for search).
@@ -534,14 +523,11 @@ docker-compose down -v
 * No custom publisher or background polling service — Debezium handles publish, retry, and offset tracking as a Kafka Connect connector.
 * The same pattern handles both transfer initiation and accept/reject commands via a single Kafka topic with action-based routing.
 
-## Dapr Actor Concurrency
-* Transfer actors are keyed by employee ID, guaranteeing single-threaded execution per employee.
-* Eliminates race conditions (e.g., concurrent transfers exceeding limits) without manual locking or database-level optimistic concurrency.
-
-## Durable Workflow Orchestration
-* Dapr Workflows (Durable Task Framework) orchestrate multi-step transfer processing with automatic state persistence.
-* External events (balance accept/reject) can pause and resume workflows with configurable timeouts.
-* Failed bank transfers retry with exponential backoff — the workflow survives service restarts.
+## Saga-Based Concurrency & Orchestration
+* MassTransit Saga state machines manage the transfer lifecycle with automatic state persistence in MongoDB.
+* Saga instances are correlated by employee ID, serializing concurrent transfers and eliminating race conditions without manual locking.
+* External events (balance accept/reject) can pause and resume the saga with configurable timeouts via scheduled messages.
+* Failed bank transfers retry with exponential backoff — the saga state survives service restarts.
 
 ## Derived Data via Stream Processing
 * Business calculations (hours aggregation, gross pay, net pay) happen in specialized processors outside the write service.
@@ -555,9 +541,9 @@ docker-compose down -v
 * .NET API, Java Kafka Streams, ksqlDB SQL, React frontends — all integrated through Kafka as the universal backbone.
 * Each component uses the best tool for its job.
 
-## Dapr Infrastructure Abstraction
-* Pub/sub and state store are configured via YAML components.
-* Swapping Kafka for RabbitMQ or MongoDB for another store is a config change, not a code change.
+## MassTransit Transport Abstraction
+* Pub/sub transport is configured via MassTransit's Kafka Rider.
+* MassTransit supports swapping Kafka for RabbitMQ, Azure Service Bus, or Amazon SQS with minimal code changes.
 
 ## Kafka as Durable Event Log
 * Events are retained indefinitely, enabling replay (as the subscriber recovery demonstrates), new consumer bootstrapping, and audit trails.

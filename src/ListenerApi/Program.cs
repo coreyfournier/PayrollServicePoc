@@ -1,9 +1,12 @@
+using Confluent.Kafka;
+using ListenerApi.Consumers;
 using ListenerApi.Data.DbContext;
 using ListenerApi.Data.Repositories;
 using ListenerApi.Data.Services;
 using ListenerApi.GraphQL.Mutations;
 using ListenerApi.GraphQL.Queries;
 using ListenerApi.GraphQL.Subscriptions;
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,20 +23,8 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Controllers + Dapr
-// Dapr outbox publishes CloudEvents with datacontenttype=text/plain (Dapr bug),
-// so the JSON formatter must also accept text/plain to avoid HTTP 415.
-builder.Services.AddControllers(options =>
-{
-    var jsonFormatter = options.InputFormatters
-        .OfType<Microsoft.AspNetCore.Mvc.Formatters.SystemTextJsonInputFormatter>()
-        .First();
-    jsonFormatter.SupportedMediaTypes.Add("text/plain");
-    // Raw Kafka messages (e.g. from NetPayProcessor) arrive via Dapr with
-    // datacontenttype=application/octet-stream since no content-type header is set.
-    jsonFormatter.SupportedMediaTypes.Add("application/octet-stream");
-}).AddDapr();
-builder.Services.AddDaprClient();
+// Controllers (no Dapr)
+builder.Services.AddControllers();
 
 // EF Core + MySQL
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -50,6 +41,54 @@ builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher
 builder.Services.AddHttpClient("TransferService", client =>
 {
     client.BaseAddress = new Uri("http://transfer-api:5002");
+});
+
+// MassTransit with Kafka Rider for consuming raw (non-MassTransit) messages
+// from employee-events, transfer-events, and employee-net-pay topics.
+var kafkaBootstrapServers = builder.Configuration.GetValue<string>("Kafka:BootstrapServers") ?? "kafka:9092";
+
+builder.Services.AddMassTransit(x =>
+{
+    x.UsingInMemory((context, cfg) =>
+    {
+        cfg.ConfigureEndpoints(context);
+    });
+
+    x.AddRider(rider =>
+    {
+        rider.AddConsumer<EmployeeEventConsumer>();
+        rider.AddConsumer<TransferEventConsumer>();
+        rider.AddConsumer<NetPayEventConsumer>();
+
+        rider.UsingKafka((context, k) =>
+        {
+            k.Host(kafkaBootstrapServers);
+
+            // employee-events: CloudEvent-wrapped JSON from PayrollService's outbox
+            k.TopicEndpoint<Ignore, EmployeeEventMessage>("employee-events", "listener-api-group", e =>
+            {
+                e.SetValueDeserializer(new RawStringDeserializer<EmployeeEventMessage>(
+                    (msg, val) => msg.Value = val));
+                e.ConfigureConsumer<EmployeeEventConsumer>(context);
+            });
+
+            // transfer-events: CloudEvent-wrapped JSON from TransferService's outbox
+            k.TopicEndpoint<Ignore, TransferEventMessage>("transfer-events", "listener-api-group", e =>
+            {
+                e.SetValueDeserializer(new RawStringDeserializer<TransferEventMessage>(
+                    (msg, val) => msg.Value = val));
+                e.ConfigureConsumer<TransferEventConsumer>(context);
+            });
+
+            // employee-net-pay: raw JSON from Java NetPayProcessor (may also be CloudEvent-wrapped)
+            k.TopicEndpoint<Ignore, NetPayEventMessage>("employee-net-pay", "listener-api-group", e =>
+            {
+                e.SetValueDeserializer(new RawStringDeserializer<NetPayEventMessage>(
+                    (msg, val) => msg.Value = val));
+                e.ConfigureConsumer<NetPayEventConsumer>(context);
+            });
+        });
+    });
 });
 
 // GraphQL
@@ -84,29 +123,10 @@ using (var scope = app.Services.CreateScope())
 
 app.UseCors();
 
-// Capture raw body for event subscription endpoints BEFORE UseCloudEvents() consumes it.
-// Dapr outbox stringifies the JSON data field (Dapr bug #8130), so UseCloudEvents()
-// produces a body that can't deserialize into our DTOs. We preserve the original
-// CloudEvent body and parse it manually in the controllers.
-app.Use(async (context, next) =>
-{
-    if (context.Request.Path.StartsWithSegments("/api/eventsubscription"))
-    {
-        context.Request.EnableBuffering();
-        using var reader = new StreamReader(context.Request.Body, leaveOpen: true);
-        var body = await reader.ReadToEndAsync();
-        context.Request.Body.Position = 0;
-        context.Items["RawBody"] = body;
-    }
-    await next();
-});
-
 app.UseRouting();
 app.UseWebSockets();
-app.UseCloudEvents();
 
 app.MapControllers();
-app.MapSubscribeHandler();
 app.MapGraphQL();
 
 app.Run();

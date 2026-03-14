@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Employee payroll system POC demonstrating Dapr with Kafka pub/sub, MongoDB state store, the transactional outbox pattern, and ksqlDB stream processing for real-time pay period aggregation. Two independent frontends consume the API: a REST+React app and a GraphQL+WebSocket subscription client.
+Employee payroll system POC demonstrating MassTransit with Kafka pub/sub, MongoDB, the transactional outbox pattern, and ksqlDB stream processing for real-time pay period aggregation. Two independent frontends consume the API: a REST+React app and a GraphQL+WebSocket subscription client.
 
 ## Common Commands
 
@@ -19,13 +19,6 @@ docker-compose up -d zookeeper kafka mongodb zipkin  # Infrastructure only
 ```bash
 dotnet build PayrollService.sln
 dotnet run --project src/PayrollService.Api
-```
-
-### Run API with Dapr sidecar (local)
-```bash
-cd src/PayrollService.Api
-dapr run --app-id payroll-api --app-port 5000 --dapr-http-port 3500 \
-  --components-path ../../dapr/components --config ../../dapr/config.yaml -- dotnet run
 ```
 
 ### Frontend (REST client)
@@ -45,7 +38,7 @@ cd payrollProClient && npm install && npm run dev
 docker-compose up seed              # Run after the stack is up
 ```
 
-The seed service is the **single initialization entry point** — it creates Kafka topics, initializes ksqlDB streams/tables, registers the Elasticsearch sink connector, and seeds data (5 employees, 40 time entries, 5 tax records, 7 deductions) via the REST API. This exercises the full event pipeline (Dapr outbox → Kafka → ksqlDB → ListenerApi → GraphQL). The script (`scripts/seed.sh`) clears existing data first, making it safe to re-run. Requires `payroll-api`, `listener-api`, `kafka`, `elasticsearch`, and `kafka-connect` to be healthy.
+The seed service is the **single initialization entry point** — it creates Kafka topics, initializes ksqlDB streams/tables, registers the Elasticsearch sink connector, and seeds data (5 employees, 40 time entries, 5 tax records, 7 deductions) via the REST API. This exercises the full event pipeline (MassTransit outbox → Kafka → ksqlDB → ListenerApi → GraphQL). The script (`scripts/seed.sh`) clears existing data first, making it safe to re-run. Requires `payroll-api`, `listener-api`, `kafka`, `elasticsearch`, and `kafka-connect` to be healthy.
 
 The `kafka-init` and `ksqldb-init` services are available standalone under the `init` profile (`docker-compose --profile init up kafka-init`) but do not auto-start — seed handles everything.
 
@@ -71,7 +64,7 @@ Api (.NET 9.0)  →  Application (.NET 7.0)  →  Domain (.NET 7.0)
 
 - **Domain**: Entities (`Employee`, `TimeEntry`, `TaxInformation`, `Deduction`), domain events, repository interfaces. Base `Entity` class collects domain events in-memory. `Employee.PayPeriodHours` (decimal, default 40) specifies hours per pay period for salaried employees; used by ksqlDB to calculate gross pay instead of time entries.
 - **Application**: MediatR CQRS — commands for writes, queries for reads, DTOs for API boundaries.
-- **Infrastructure**: MongoDB persistence, Dapr state store integration, event publishing. Contains `DependencyInjection.cs` for all service registration.
+- **Infrastructure**: MongoDB persistence, MassTransit Kafka integration, event publishing via Confluent.Kafka producer with CloudEvent wrapper. Contains `DependencyInjection.cs` for all service registration.
 - **Api**: ASP.NET Core controllers, Swagger UI at `/swagger`.
 
 ### DDD Layers (TransferService.*)
@@ -82,39 +75,32 @@ Api (.NET 9.0)  →  Application (.NET 7.0)  →  Domain (.NET 7.0)
                                             Infrastructure (.NET 7.0)
 ```
 
-Separate bounded context for bank transfers, extracted from PayrollService. Has its own MongoDB database (`transfer_db`), Dapr state store (`statestore-transfers`), and Dapr components (`dapr/components-transfer/`).
+Separate bounded context for bank transfers, extracted from PayrollService. Has its own MongoDB database (`transfer_db`).
 
 - **Domain**: Entities (`Transfer`, `BankAccount`), value objects (`TransferLimits`), domain events, repository interfaces.
 - **Application**: MediatR CQRS — transfer initiation, bank account CRUD, transfer limits queries.
-- **Infrastructure**: Separate `TransferMongoDbContext`, Dapr state store with outbox publishing to `transfer-events` topic, ksqlDB balance service, simulated bank service.
-- **Api**: ASP.NET Core controllers, Dapr Actors (keyed by employeeId), Dapr Workflows (balance verification, bank transfer with retries). Runs on port 5002.
+- **Infrastructure**: Separate `TransferMongoDbContext`, MassTransit outbox publishing to `transfer-events` topic, ksqlDB balance service, simulated bank service.
+- **Api**: ASP.NET Core controllers, MassTransit saga state machine for transfer orchestration. Runs on port 5002.
 
 The frontend nginx config routes `/api/transfers/` and `/api/bankaccounts/` to `transfer-api`, all other `/api/` requests to `payroll-api`.
 
-### Two Unit-of-Work Implementations
-
-The `Features__UseDaprOutbox` env var (default `true` in docker-compose) toggles between:
-
-1. **DaprStateStoreUnitOfWork** — Dapr state store is the authoritative write path. `ExecuteAsync` writes entity state + outbox events atomically via the Dapr state store transaction FIRST, then updates the MongoDB collection as a best-effort read model. If the Dapr transaction fails, nothing is written (consistent). If the MongoDB write fails, a warning is logged but the request succeeds (entity is safely in Dapr state store).
-2. **TransactionalUnitOfWork** — writes entity + outbox messages to MongoDB in a transaction, then publishes via `DaprEventPublisher` separately.
-
-Both live in `src/PayrollService.Infrastructure/StateStore/` and `Persistence/`.
-
-### Write Path (DaprStateStoreUnitOfWork)
+### Write Path (MassTransitUnitOfWork)
 
 ```
 Controller → MediatR Handler → Entity (raises domain events)
-  → DaprStateStoreUnitOfWork.ExecuteAsync()
-      1. Dapr State Store Transaction  (entity + outbox — ATOMIC, SOURCE OF TRUTH) → Kafka
-      2. MongoDB Collection Write      (read model — BEST-EFFORT, logged on failure)
-  → ListenerApi (Dapr topic subscription) → MySQL → GraphQL subscription → PayrollPro Client
+  → MassTransitUnitOfWork.ExecuteAsync()
+      1. MongoDB Write (entity persisted)
+      2. Kafka Publish via Confluent.Kafka producer (domain events wrapped in CloudEvent envelope)
+  → ListenerApi (MassTransit Kafka Rider consumer) → MySQL → GraphQL subscription → PayrollPro Client
 ```
 
-Repository `AddAsync` methods use `ReplaceOneAsync` with `IsUpsert = true` to be idempotent — retries after a Dapr success don't produce duplicate-key errors in MongoDB.
+Repository `AddAsync` methods use `ReplaceOneAsync` with `IsUpsert = true` to be idempotent — retries don't produce duplicate-key errors in MongoDB.
 
 ### ListenerApi (.NET 7.0)
 
-Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). Subscribes to Kafka `employee-events` and `employee-net-pay` topics via Dapr. Processes events idempotently (checks `LastEventTimestamp` for employees, `PayPeriodNumber` for pay attributes). Broadcasts changes to WebSocket subscribers via in-memory `ITopicEventSender`. Auto-applies EF Core migrations on startup.
+Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). Subscribes to Kafka `employee-events` and `employee-net-pay` topics via MassTransit Kafka Rider consumers. Processes events idempotently (checks `LastEventTimestamp` for employees, `PayPeriodNumber` for pay attributes). Broadcasts changes to WebSocket subscribers via in-memory `ITopicEventSender`. Auto-applies EF Core migrations on startup.
+
+Consumers parse CloudEvent JSON envelopes for backward compatibility with the ksqlDB pipeline (which expects the CloudEvent `data` field as a stringified JSON payload).
 
 **Entities:**
 - `EmployeeRecord` — employee data from `employee-events` topic
@@ -137,15 +123,6 @@ Separate service: HotChocolate GraphQL server backed by MySQL (Pomelo EF Core). 
 | elasticsearch | 9200 | Search index |
 | kafka-connect | 8083 | ES sink connector REST API |
 | zipkin | 9411 | Distributed tracing |
-
-### Dapr Components (`dapr/components/`)
-
-- `statestore-mongodb.yaml` — MongoDB state store with outbox config (`outboxPublishPubsub: kafka-pubsub`, `outboxPublishTopic: employee-events`)
-- `kafka-pubsub.yaml` / `kafka-pubsub-listener.yaml` — Kafka pub/sub for payroll-api and listener-api respectively
-
-### Dapr Sidecars
-
-All three Dapr sidecars (`payroll-api-dapr`, `listener-api-dapr`, `transfer-api-dapr`) run as separate containers on `payroll-network` with `-app-channel-address` pointing at their app's service name. This ensures Docker DNS resolves the app across container restarts. **Do not use `network_mode: "service:..."` for sidecars** — it shares the app's network namespace, so when the app restarts the sidecar loses DNS and Kafka connectivity permanently until manually restarted.
 
 ### Kafka Topics
 
@@ -173,7 +150,7 @@ employee-net-pay topic (produced by NetPayProcessor)
 
 **Key design decisions:**
 
-- **`data` is VARCHAR, not STRUCT** — Dapr's outbox stringifies the JSON payload (known issue #8130). Fields are extracted via `EXTRACTJSONFIELD(data, '$.FieldName')` with PascalCase entity field names (`$.Id`, `$.EmployeeId`, `$.ClockIn`, `$.ClockOut`, `$.HoursWorked`, `$.PayPeriodHours`).
+- **`data` is VARCHAR, not STRUCT** — The CloudEvent wrapper stringifies the JSON payload for compatibility. Fields are extracted via `EXTRACTJSONFIELD(data, '$.FieldName')` with PascalCase entity field names (`$.Id`, `$.EmployeeId`, `$.ClockIn`, `$.ClockOut`, `$.HoursWorked`, `$.PayPeriodHours`).
 - **Event type filtering** — The top-level CloudEvent `type` is always `com.dapr.event.sent`. The actual event type is extracted from `$.DomainEvents[0].EventType` inside the stringified data.
 - **Edit-safe aggregation** — `AS_MAP(COLLECT_LIST(TIME_ENTRY_ID), COLLECT_LIST(HOURS_WORKED))` deduplicates by time entry ID (last value wins for duplicate keys), then `REDUCE(MAP_VALUES(...))` sums the latest hours per entry. This prevents double-counting when time entries are edited.
 - **Pay period math** — Bi-weekly periods starting from epoch 2024-01-01T00:00:00Z (1704067200000 ms), each 14 days (1209600000 ms).
@@ -192,7 +169,7 @@ employee-net-pay topic (produced by NetPayProcessor)
 
 - **Single-stream approach** — Both employee events (with `PayRate`) and time entry events (with `HoursWorked`) flow through the same `employee-events` topic. `GROSS_PAY_EVENTS` captures both, normalizing `EMPLOYEE_ID` via `COALESCE($.EmployeeId, $.Id)`.
 - **Pay rate tracking** — `LATEST_BY_OFFSET(PAY_RATE, true)` ignores nulls from time entry events, keeping the most recent rate from employee events. The `__PAY_RATE__` sentinel for `TIME_ENTRY_ID` contributes 0 hours to the AS_MAP dedup.
-- **Salary vs Hourly** — `PayType=1` (Hourly): rate is $/hour. `PayType=2` (Salary): rate is $/year, divided by 2080 (52 weeks × 40 hours) to get the effective hourly rate.
+- **Salary vs Hourly** — `PayType=1` (Hourly): rate is $/hour. `PayType=2` (Salary): rate is $/year, divided by 2080 (52 weeks x 40 hours) to get the effective hourly rate.
 - **PayPeriodHours for salaried employees** — Salaried employees don't clock in/out. The `PayPeriodHours` field on the Employee entity (default 40) specifies how many hours per pay period a salaried employee works. The ksqlDB pipeline uses `LATEST_BY_OFFSET(PAY_PERIOD_HOURS, true)` for `TOTAL_HOURS_WORKED` when `PAY_TYPE = '2'`, instead of summing time entries. Hourly employees still use the AS_MAP+REDUCE dedup pattern.
 - **Current period only** — Pay rate changes are assigned to the current pay period (via `$.UpdatedAt`), so only that period's `GROSS_PAY` updates. Past periods retain their existing values.
 
@@ -205,7 +182,7 @@ employee-net-pay topic (produced by NetPayProcessor)
 
 ### Net Pay Processor (Kafka Streams, Java 17)
 
-Standalone Kafka Streams application (`src/NetPayProcessor/`) that computes per-employee, per-pay-period net pay by combining gross pay with tax configuration and deductions. Connects directly to Kafka (no Dapr sidecar needed).
+Standalone Kafka Streams application (`src/NetPayProcessor/`) that computes per-employee, per-pay-period net pay by combining gross pay with tax configuration and deductions. Connects directly to Kafka.
 
 **Pipeline:**
 
@@ -226,13 +203,13 @@ When a **tax info event** arrives: update store → look up latest gross pay for
 When a **deduction event** arrives: update store → look up latest gross pay for current period → recompute → emit.
 
 **Tax calculation:**
-- **Federal**: Progressive brackets (2024 rates) — annualizes bi-weekly gross × 26, applies brackets, divides by 26. Single/HeadOfHousehold use single brackets; Married uses married brackets.
+- **Federal**: Progressive brackets (2024 rates) — annualizes bi-weekly gross x 26, applies brackets, divides by 26. Single/HeadOfHousehold use single brackets; Married uses married brackets.
 - **State**: Simplified flat rates per state (e.g., CA=9.3%, NY=6.85%, TX=0%, WA=0%, IL=4.95%).
 - **Additional withholding**: `AdditionalFederalWithholding` and `AdditionalStateWithholding` from tax info events added on top.
 
 **Deduction calculation:**
 - **Fixed** (`isPercentage=false`): subtracted directly
-- **Percentage** (`isPercentage=true`): `(amount/100) × grossPay`
+- **Percentage** (`isPercentage=true`): `(amount/100) x grossPay`
 - **Inactive** (`isActive=false`): contribute $0 (kept in map for reactivation)
 
 **`employee-net-pay` topic schema:**
@@ -252,7 +229,7 @@ When a **deduction event** arrives: update store → look up latest gross pay fo
 
 ### Elasticsearch Updater (Kafka Consumer, Java 17)
 
-Standalone Kafka consumer application (`src/ElasticsearchUpdater/`) that combines employee info with their last 4 pay periods into a single search document. Connects directly to Kafka (no Dapr sidecar needed).
+Standalone Kafka consumer application (`src/ElasticsearchUpdater/`) that combines employee info with their last 4 pay periods into a single search document. Connects directly to Kafka.
 
 **Pipeline:**
 
@@ -302,7 +279,7 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 
 ### Transfer Workflow
 
-The transfer feature is a **separate bounded context** (`TransferService.*`) with its own database (`transfer_db`), Dapr state store, and Dapr sidecar. It demonstrates several advanced architecture patterns.
+The transfer feature is a **separate bounded context** (`TransferService.*`) with its own database (`transfer_db`). It demonstrates several advanced architecture patterns.
 
 **Debezium Outbox Pattern (Transfer Command Dispatch):**
 
@@ -324,116 +301,108 @@ See `docs/transfer-outbox-options.md` for the full comparison of approaches eval
 Client (REST/GraphQL)
   │
   ├─► Direct: POST transfer-api:5002/api/Transfers
-  │     └─► TransferActor (keyed by employeeId, single-threaded)
+  │     └─► TransferStateMachine (saga keyed by transferId)
   │           ├─ Validate bank account ownership
   │           ├─ Check transfer limits (daily/period count/amount)
-  │           ├─ Create Transfer entity → DaprTransferStateStoreUnitOfWork
-  │           │    ├─ Dapr state store transaction (entity + outbox) ─► Kafka (transfer-events)
-  │           │    └─ MongoDB transfer_db (best-effort read model)
-  │           └─ Schedule TransferWorkflow
+  │           ├─ Create Transfer entity → MassTransitUnitOfWork
+  │           │    ├─ MongoDB transfer_db write
+  │           │    └─ Kafka publish (transfer-events)
+  │           └─ Saga transitions through states
   │
-  └─► Async: ListenerApi (Debezium Outbox) → Kafka (transfer-requests) → transfer-api subscription
-        └─► Same actor path as above
+  └─► Async: ListenerApi (Debezium Outbox) → Kafka (transfer-requests) → TransferRequestConsumer
+        └─► Same saga path as above
 
-TransferWorkflow (Durable Task Framework):
-  1. ValidateTransferActivity — verify transfer exists
-  2. VerifyBalanceActivity — query ksqlDB for employee net pay
-  │   ├─ Balance sufficient → continue
-  │   └─ Balance insufficient → MarkAwaitingConfirmationActivity
-  │       └─ WaitForExternalEvent("BalanceAccepted", 24h timeout)
-  │           ├─ Accepted → continue
-  │           └─ Rejected/timeout → FailTransferActivity
-  3. UpdateTransferStatusActivity — mark Processing
-  4. ExecuteBankTransferActivity — call SimulatedBankService
-  │   └─ Retry up to 3× with exponential backoff (2s, 4s, 8s)
-  5. CompleteTransferActivity or FailTransferActivity
+TransferStateMachine (MassTransit Saga):
+  States: Submitted → BalanceVerified | AwaitingConfirmation → Processing → Completed | Failed
+
+  1. Submitted — verify transfer exists, query ksqlDB for employee net pay
+  │   ├─ Balance sufficient → BalanceVerified
+  │   └─ Balance insufficient → AwaitingConfirmation
+  │       └─ Schedule 24h timeout via MassTransit Schedule<>
+  │           ├─ BalanceAccepted event → BalanceVerified
+  │           └─ Timeout/BalanceRejected → Failed
+  2. BalanceVerified → Processing — call SimulatedBankService
+  │   └─ Retry up to 3x with exponential backoff via scheduled messages (2s, 4s, 8s)
+  3. Processing → Completed or Failed
   │
-  Each state change → DaprTransferStateStoreUnitOfWork → Kafka (transfer-events)
-                                                              │
-                                                              ▼
-                                                    ListenerApi (Dapr subscription)
-                                                         │
-                                                         ▼
-                                                    MySQL listener_db.TransferRecords
-                                                         │
-                                                         ▼
-                                                    GraphQL subscription → PayrollPro Client
+  Each state change → MassTransitUnitOfWork → Kafka (transfer-events)
+                                                    │
+                                                    ▼
+                                          ListenerApi (MassTransit Kafka Rider consumer)
+                                                    │
+                                                    ▼
+                                          MySQL listener_db.TransferRecords
+                                                    │
+                                                    ▼
+                                          GraphQL subscription → PayrollPro Client
 ```
 
 **Two Databases:**
-- **transfer_db** (MongoDB) — authoritative transfer and bank account data, written atomically via Dapr state store outbox. Collections: `transfers`, `bank_accounts`, `dapr_transfer_state`.
+- **transfer_db** (MongoDB) — authoritative transfer and bank account data. Collections: `transfers`, `bank_accounts`.
 - **listener_db.TransferRecords** (MySQL) — read model materialized from Kafka `transfer-events` topic via ListenerApi. Used for client queries and GraphQL subscriptions.
 
-**Dapr Actors for Concurrency Control:**
-- `TransferActor` is keyed by employeeId. Dapr Actors guarantee single-threaded execution per actor ID, eliminating concurrent transfer races without manual locking.
-- The actor checks transfer limits (per pay period count, per period amount, per day count), creates the Transfer entity atomically, then starts the Dapr Workflow.
-
-**Dapr Workflow (Durable Task Framework):**
-- `TransferWorkflow` orchestrates: validate → verify balance → mark processing → call simulated bank → complete/fail.
-- Retries bank transfer up to 3 times with exponential backoff.
-- Each state change persists via `DaprTransferStateStoreUnitOfWork` (outbox → `transfer-events` topic).
-- Balance verification queries ksqlDB for the employee's current net pay. If the transfer amount exceeds net pay, the workflow pauses and waits for client confirmation (up to 24 hours).
+**MassTransit Saga State Machine for Concurrency Control:**
+- `TransferStateMachine` orchestrates the full transfer lifecycle. Concurrency is handled by MongoDB saga document-level locking — concurrent messages for the same saga instance are serialized at the database level.
+- The saga checks transfer limits (per pay period count, per period amount, per day count), creates the Transfer entity, and transitions through states.
+- The 24h confirmation timeout uses MassTransit's `Schedule<>` instead of external timer infrastructure.
+- Bank transfer retries use scheduled messages with exponential backoff.
 
 **Transfer Limits:**
 - Configurable via environment variables: `TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`.
-- Transfer-api enforces authoritatively inside the actor. ListenerApi does a best-effort pre-check from its own materialized MySQL data.
+- Transfer-api enforces authoritatively inside the saga. ListenerApi does a best-effort pre-check from its own materialized MySQL data.
 - The `GET /api/transfers/employee/{id}/limits` endpoint returns limits + current usage + `canTransfer` boolean.
 
 **Simulated Bank Service:**
-- `SimulatedBankService` adds random delays (1-10s) and ~20% failure rate to test the retry workflow.
+- `SimulatedBankService` adds random delays (1-10s) and ~20% failure rate to test the retry logic.
 
-**Dapr Components (dapr/components-transfer/):**
-- `statestore-transfers.yaml` — MongoDB state store pointed at `transfer_db`, with `actorStateStore: "true"` and outbox publishing to `transfer-events` topic via `kafka-pubsub`.
-- `kafka-pubsub.yaml` — Kafka pub/sub with `consumerGroup: transfer-service-group` (separate from payroll-api's consumer group).
+**MassTransit Kafka Rider Configuration:**
+- Kafka producer/consumer configuration is done in `Program.cs` for each service via MassTransit's Kafka Rider.
+- Transfer-api uses a separate consumer group (`transfer-service-group`) from payroll-api.
 
 **Docker Services:**
 - `transfer-api` (port 5002) — TransferService.Api container, depends on MongoDB and Kafka.
-- `transfer-api-dapr` — Dapr sidecar for transfer-api, with placement and scheduler connections for actor/workflow support. Uses `/components-transfer` volume.
 
 **Key Files:**
-- `src/TransferService.Api/Actors/TransferActor.cs` — Dapr Actor for concurrency control
-- `src/TransferService.Api/Workflows/TransferWorkflow.cs` — Dapr Workflow orchestration
-- `src/TransferService.Api/Workflows/Activities/` — 7 workflow activities
-- `src/TransferService.Infrastructure/StateStore/DaprStateStoreUnitOfWork.cs` — transfer-specific outbox
+- `src/TransferService.Api/Sagas/TransferStateMachine.cs` — MassTransit saga state machine for transfer orchestration
+- `src/TransferService.Api/Sagas/TransferState.cs` — saga state entity
+- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — consumes transfer-requests from Kafka
 - `src/TransferService.Infrastructure/ExternalServices/SimulatedBankService.cs` — simulated bank
 - `src/TransferService.Infrastructure/ExternalServices/KsqlDbBalanceService.cs` — ksqlDB balance queries
 - `src/ListenerApi/Controllers/TransferController.cs` — async command initiation + queries
-- `dapr/components-transfer/statestore-transfers.yaml` — dedicated state store for transfer-events topic
 
 ### Kafka Topics (Transfers)
 
 - `transfer-requests` — async commands from ListenerApi to transfer-api
-- `transfer-events` — transfer state changes from transfer-api to ListenerApi (via Dapr outbox)
+- `transfer-events` — transfer state changes from transfer-api to ListenerApi (via MassTransit outbox)
 
 ### Key Files
 
-- `src/PayrollService.Api/Program.cs` — DI setup, feature flag for Dapr outbox toggle
+- `src/PayrollService.Api/Program.cs` — DI setup, MassTransit Kafka Rider configuration
 - `src/PayrollService.Infrastructure/DependencyInjection.cs` — all infrastructure service registration
-- `src/PayrollService.Infrastructure/StateStore/DaprStateStoreUnitOfWork.cs` — atomic outbox logic
+- `src/PayrollService.Infrastructure/Messaging/MassTransitUnitOfWork.cs` — MongoDB write + Kafka publish
+- `src/PayrollService.Infrastructure/Messaging/CloudEventWrapper.cs` — wraps domain events in CloudEvent envelope
 - `src/PayrollService.Domain/Common/Entity.cs` — base entity with domain event collection
-- `src/ListenerApi/Program.cs` — GraphQL schema, Dapr subscription, migration runner
+- `src/ListenerApi/Program.cs` — GraphQL schema, MassTransit Kafka Rider consumers, migration runner
+- `src/ListenerApi/Consumers/` — Kafka Rider consumer classes (employee-events, employee-net-pay, transfer-events)
 - `src/ListenerApi.Data/Entities/EmployeePayAttributes.cs` — net pay breakdown entity (1:1 with EmployeeRecord)
-- `src/ListenerApi/Controllers/EventSubscriptionController.cs` — Dapr subscription endpoints (employee-events, employee-net-pay)
-- `dapr/components/statestore-mongodb.yaml` — outbox configuration (critical for event publishing)
 - `ksqldb/statements.sql` — ksqlDB stream/table definitions for pay period aggregation
 - `scripts/seed.sh` — API-based seed script (runs as Docker container, exercises full event pipeline)
 - `src/NetPayProcessor/` — Kafka Streams Java app for net pay calculation
 - `src/ElasticsearchUpdater/` — Kafka consumer Java app combining employee info + net pay for Elasticsearch
 - `docker/Dockerfile.kafka-connect` — Kafka Connect image with Elasticsearch connector
-- `src/TransferService.Api/Program.cs` — TransferService DI, Dapr workflow/actor registration
-- `src/TransferService.Api/Actors/TransferActor.cs` — Dapr Actor for transfer concurrency
-- `src/TransferService.Api/Workflows/TransferWorkflow.cs` — transfer workflow orchestration
+- `src/TransferService.Api/Program.cs` — TransferService DI, MassTransit saga registration
+- `src/TransferService.Api/Sagas/TransferStateMachine.cs` — MassTransit saga for transfer orchestration
+- `src/TransferService.Api/Sagas/TransferState.cs` — saga state entity
+- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — transfer request consumer
 - `src/TransferService.Domain/Entities/Transfer.cs` — transfer domain entity
 - `src/TransferService.Domain/Entities/BankAccount.cs` — bank account domain entity
 - `src/TransferService.Infrastructure/DependencyInjection.cs` — transfer infrastructure registration
-- `dapr/components-transfer/statestore-transfers.yaml` — transfer-specific Dapr state store with outbox
-- `dapr/components-transfer/kafka-pubsub.yaml` — transfer service Kafka pub/sub
 - `docker/Dockerfile.transferapi` — TransferService.Api Dockerfile
 - `src/ListenerApi.Data/Entities/OutboxMessage.cs` — Debezium outbox entity
-- `docs/transfer-outbox-options.md` — Comparison of outbox approaches (MySQL, Dapr, Debezium)
+- `docs/transfer-outbox-options.md` — Comparison of outbox approaches (MySQL, MassTransit, Debezium)
 
 ## Known Issues
 
-- Dapr's transactional outbox does not preserve the data payload as a JSON object — it gets stringified. Tracked at https://github.com/dapr/dapr/issues/8130. The ksqlDB pipeline works around this by declaring `data` as VARCHAR and using `EXTRACTJSONFIELD`.
+- The CloudEvent format preserves the stringified `data` payload for backward compatibility with the ksqlDB pipeline. The ksqlDB streams declare `data` as VARCHAR and use `EXTRACTJSONFIELD` to extract fields.
 - The `COLLECT_LIST` in the ksqlDB aggregation grows unboundedly (appends every event). Acceptable for a POC but would need a retention strategy in production.
 - Re-running ksqlDB initialization (via seed or `--profile init`) drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover: they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. No manual intervention needed.

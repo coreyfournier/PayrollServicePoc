@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Dapr.Client;
 using ListenerApi.Data.DbContext;
 using ListenerApi.Data.Entities;
 using ListenerApi.Data.Repositories;
@@ -14,7 +13,6 @@ public class TransferController : ControllerBase
     private readonly ITransferRecordRepository _transferRepository;
     private readonly IEmployeeRecordRepository _employeeRepository;
     private readonly ListenerDbContext _dbContext;
-    private readonly DaprClient _daprClient;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<TransferController> _logger;
 
@@ -25,14 +23,12 @@ public class TransferController : ControllerBase
         ITransferRecordRepository transferRepository,
         IEmployeeRecordRepository employeeRepository,
         ListenerDbContext dbContext,
-        DaprClient daprClient,
         IHttpClientFactory httpClientFactory,
         ILogger<TransferController> logger)
     {
         _transferRepository = transferRepository;
         _employeeRepository = employeeRepository;
         _dbContext = dbContext;
-        _daprClient = daprClient;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }

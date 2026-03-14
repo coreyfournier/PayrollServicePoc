@@ -1,42 +1,22 @@
-using System.Text.Json;
-using Dapr.Client;
 using MongoDB.Driver;
 using TransferService.Domain.Entities;
+using TransferService.Domain.Enums;
 using TransferService.Domain.Repositories;
 using TransferService.Infrastructure.Persistence;
-using TransferService.Infrastructure.StateStore;
 
 namespace TransferService.Infrastructure.Repositories;
 
-public class DaprTransferRepository : ITransferRepository
+public class TransferRepository : ITransferRepository
 {
-    private const string StateStoreName = "statestore-transfers";
-    private readonly DaprClient _daprClient;
     private readonly TransferMongoDbContext _dbContext;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    public TransferRepository(TransferMongoDbContext dbContext)
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-    };
-
-    public DaprTransferRepository(DaprClient daprClient, TransferMongoDbContext dbContext)
-    {
-        _daprClient = daprClient;
         _dbContext = dbContext;
     }
 
     public async Task<Transfer?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        try
-        {
-            var key = StateKeyHelper.GetTransferKey(id);
-            var json = await _daprClient.GetStateAsync<string>(StateStoreName, key, cancellationToken: cancellationToken);
-            if (!string.IsNullOrEmpty(json))
-                return JsonSerializer.Deserialize<Transfer>(json, JsonOptions);
-        }
-        catch { }
-
         return await _dbContext.Transfers.Find(t => t.Id == id).FirstOrDefaultAsync(cancellationToken);
     }
 
@@ -69,7 +49,7 @@ public class DaprTransferRepository : ITransferRepository
 
         if (!string.IsNullOrEmpty(statusFilter))
         {
-            var status = Enum.Parse<Domain.Enums.TransferStatus>(statusFilter, ignoreCase: true);
+            var status = Enum.Parse<TransferStatus>(statusFilter, ignoreCase: true);
             filter = filterBuilder.Eq(t => t.Status, status);
         }
 
