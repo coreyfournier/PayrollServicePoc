@@ -255,6 +255,18 @@ Each state change publishes events to the `transfer-events` Kafka topic via the 
 
 Configurable via environment variables (`TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`). Enforced authoritatively by TransferService inside the saga. ListenerApi performs a best-effort pre-check from its materialized MySQL data. The `GET /api/transfers/employee/{id}/limits` endpoint returns current usage and a `canTransfer` boolean.
 
+### One In-Progress Transfer Per Employee
+
+At most one transfer in a non-terminal state (Initiated, Processing, AwaitingConfirmation) is allowed per employee at any time. Enforced through four layers:
+
+1. **MongoDB partial unique index** — A unique index on `EmployeeId` filtered to in-progress statuses (`unique_employee_in_progress_transfer`) provides the concurrency-safe guarantee. Documents with terminal statuses (Completed, Failed) are excluded, so completing or failing a transfer automatically allows a new one.
+
+2. **Soft validation check** — `TransferValidationService` calls `ITransferRepository.HasInProgressTransferAsync` before limits checks, returning a clear "transfer already in progress" message for the normal (non-race) case.
+
+3. **Duplicate key exception handling** — `TransferRepository.AddAsync` catches MongoDB error code 11000 from the named index and throws `DuplicateInProgressTransferException`. The saga catches this in both the AwaitingConfirmation and Processing `AddAsync` paths, creating a Failed transfer and finalizing the saga gracefully.
+
+4. **Best-effort ListenerApi check** — `TransferController.CheckLimitsAsync` queries MySQL `TransferRecords` for in-progress statuses, giving the UI early feedback (note: MySQL may lag behind MongoDB).
+
 ### Kafka Topics (Transfers)
 
 | Topic | Producer | Consumer | Description |

@@ -264,6 +264,12 @@ Runs as a single-node replica set (`rs0`) to support multi-document transactions
 
 The transfer feature is a **separate bounded context** (`TransferService.*`) with its own database (`transfer_db`). It demonstrates several advanced architecture patterns.
 
+**One In-Progress Transfer Per Employee:** At most one transfer in a non-terminal state (Initiated, Processing, AwaitingConfirmation) is allowed per employee at any time. Enforced at three layers:
+1. **MongoDB partial unique index** (`unique_employee_in_progress_transfer`) on `EmployeeId` filtered to in-progress statuses — concurrency-safe guarantee.
+2. **Soft check** in `TransferValidationService` via `ITransferRepository.HasInProgressTransferAsync` — provides clear error messages for the normal (non-race) case.
+3. **Duplicate key exception handling** — `TransferRepository.AddAsync` catches MongoDB error 11000 from the named index and throws `DuplicateInProgressTransferException`, caught in the saga to fail the transfer gracefully.
+4. **Best-effort check** in `ListenerApi.TransferController.CheckLimitsAsync` — queries MySQL for early UI feedback (may lag behind MongoDB).
+
 **Debezium Outbox Pattern (Transfer Command Dispatch):**
 
 ListenerApi uses the **Debezium Outbox Pattern** — an industry-standard approach used by Netflix, Airbnb, WePay, and Zalando. A single MySQL transaction atomically writes the `TransferRecord` (client read model) and an `OutboxMessage` (command envelope). Debezium's MySQL CDC connector tails the binlog and routes each outbox row to the Kafka topic specified in the row's `Topic` column, using `AggregateId` as the Kafka message key (preserving per-employee ordering). This guarantees:

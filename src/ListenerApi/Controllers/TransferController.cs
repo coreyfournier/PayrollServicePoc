@@ -223,6 +223,7 @@ public class TransferController : ControllerBase
         const int maxPerPayPeriod = 5;
         const decimal maxAmountPerPayPeriod = 10000m;
         const int maxPerDay = 1;
+        var inProgressStatuses = new[] { "Initiated", "Processing", "AwaitingConfirmation", "Queued", "AcceptPending" };
 
         var periodTransfers = await _transferRepository.GetByEmployeeAndPayPeriodAsync(employeeId, payPeriodNumber);
         var currentCount = periodTransfers.Count;
@@ -232,6 +233,12 @@ public class TransferController : ControllerBase
         var transfersToday = await _transferRepository.GetCountByEmployeeAndDateAsync(employeeId, todayStart);
 
         var reasons = new List<string>();
+
+        // Best-effort in-progress check (MySQL may lag behind MongoDB)
+        var allTransfers = await _transferRepository.GetByEmployeeIdAsync(employeeId);
+        var hasInProgress = allTransfers.Any(t => inProgressStatuses.Contains(t.Status));
+        if (hasInProgress)
+            reasons.Add("A transfer is already in progress for this employee.");
 
         if (transfersToday >= maxPerDay)
             reasons.Add($"Daily transfer limit reached ({maxPerDay} per day).");

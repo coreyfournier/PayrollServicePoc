@@ -30,6 +30,14 @@ public class TransferValidationService : ITransferValidationService
     {
         var reasons = new List<string>();
 
+        // In-progress transfer check
+        var hasInProgress = await _transferRepository.HasInProgressTransferAsync(request.EmployeeId, cancellationToken);
+        if (hasInProgress)
+        {
+            reasons.Add("A transfer is already in progress for this employee.");
+            return new TransferValidationResult(false, reasons);
+        }
+
         // Bank account validation
         var bankAccount = await _bankAccountRepository.GetByIdAsync(request.BankAccountId, cancellationToken);
         if (bankAccount == null || !bankAccount.IsActive)

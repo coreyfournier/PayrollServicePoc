@@ -1,6 +1,7 @@
 using MongoDB.Driver;
 using TransferService.Domain.Entities;
 using TransferService.Domain.Enums;
+using TransferService.Domain.Exceptions;
 using TransferService.Domain.Repositories;
 using TransferService.Infrastructure.Persistence;
 
@@ -60,14 +61,31 @@ public class TransferRepository : ITransferRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<bool> HasInProgressTransferAsync(Guid employeeId, CancellationToken cancellationToken = default)
+    {
+        var inProgressStatuses = new[] { TransferStatus.Initiated, TransferStatus.Processing, TransferStatus.AwaitingConfirmation };
+        var count = await _dbContext.Transfers.CountDocumentsAsync(
+            t => t.EmployeeId == employeeId && inProgressStatuses.Contains(t.Status),
+            new CountOptions { Limit = 1 },
+            cancellationToken);
+        return count > 0;
+    }
+
     public async Task<Transfer> AddAsync(Transfer transfer, CancellationToken cancellationToken = default)
     {
-        await _dbContext.Transfers.ReplaceOneAsync(
-            t => t.Id == transfer.Id,
-            transfer,
-            new ReplaceOptions { IsUpsert = true },
-            cancellationToken);
-        return transfer;
+        try
+        {
+            await _dbContext.Transfers.ReplaceOneAsync(
+                t => t.Id == transfer.Id,
+                transfer,
+                new ReplaceOptions { IsUpsert = true },
+                cancellationToken);
+            return transfer;
+        }
+        catch (MongoWriteException ex) when (ex.WriteError.Code == 11000 && ex.WriteError.Message.Contains("unique_employee_in_progress_transfer"))
+        {
+            throw new DuplicateInProgressTransferException(transfer.EmployeeId);
+        }
     }
 
     public async Task UpdateAsync(Transfer transfer, CancellationToken cancellationToken = default)

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using TransferService.Application.Interfaces;
 using TransferService.Application.Messages;
 using TransferService.Domain.Entities;
+using TransferService.Domain.Exceptions;
 using TransferService.Domain.Repositories;
 
 namespace TransferService.Api.Sagas;
@@ -106,9 +107,21 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                                     var transfer = Transfer.Create(
                                         ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.CorrelationId);
                                     transfer.MarkAwaitingConfirmation(ctx.Saga.CurrentBalance!.Value);
-                                    await repo.AddAsync(transfer);
-                                    await publisher.PublishAsync(transfer);
+                                    try
+                                    {
+                                        await repo.AddAsync(transfer);
+                                        await publisher.PublishAsync(transfer);
+                                    }
+                                    catch (DuplicateInProgressTransferException)
+                                    {
+                                        ctx.Saga.FailureReason = "A transfer is already in progress for this employee.";
+                                        ctx.Saga.ValidationFailed = true;
+                                        transfer.MarkFailed(ctx.Saga.FailureReason);
+                                        await publisher.PublishAsync(transfer);
+                                    }
                                 })
+                                .If(ctx => ctx.Saga.ValidationFailed,
+                                    binder => binder.TransitionTo(Failed).Finalize())
                                 .Schedule(ConfirmationTimeout, ctx => ctx.Init<ConfirmationTimedOut>(new ConfirmationTimedOut(ctx.Saga.CorrelationId))),
                             sufficient => sufficient
                                 .TransitionTo(Processing)
@@ -191,8 +204,18 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
             transfer = Transfer.Create(
                 ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.CorrelationId);
             transfer.MarkProcessing();
-            await repo.AddAsync(transfer);
-            await publisher.PublishAsync(transfer);
+            try
+            {
+                await repo.AddAsync(transfer);
+                await publisher.PublishAsync(transfer);
+            }
+            catch (DuplicateInProgressTransferException)
+            {
+                transfer.MarkFailed("A transfer is already in progress for this employee.");
+                await publisher.PublishAsync(transfer);
+                await ctx.SetCompleted();
+                return;
+            }
         }
         else if (transfer.Status != Domain.Enums.TransferStatus.Processing)
         {

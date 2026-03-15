@@ -4,6 +4,7 @@ using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using TransferService.Domain.Common;
 using TransferService.Domain.Entities;
+using TransferService.Domain.Enums;
 using TransferService.Domain.Events;
 
 namespace TransferService.Infrastructure.Persistence;
@@ -85,7 +86,17 @@ public class TransferMongoDbContext
             new CreateIndexModel<Transfer>(
                 Builders<Transfer>.IndexKeys
                     .Ascending(t => t.EmployeeId)
-                    .Ascending(t => t.InitiatedAt))
+                    .Ascending(t => t.InitiatedAt)),
+            new CreateIndexModel<Transfer>(
+                Builders<Transfer>.IndexKeys.Ascending(t => t.EmployeeId),
+                new CreateIndexOptions<Transfer>
+                {
+                    Unique = true,
+                    Name = "unique_employee_in_progress_transfer",
+                    PartialFilterExpression = Builders<Transfer>.Filter.In(
+                        t => t.Status,
+                        new[] { TransferStatus.Initiated, TransferStatus.Processing, TransferStatus.AwaitingConfirmation })
+                })
         });
 
         await BankAccounts.Indexes.CreateOneAsync(
