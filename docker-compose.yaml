@@ -548,6 +548,7 @@ services:
     volumes:
       - ./scripts/seed.sh:/seed.sh
       - ./ksqldb/statements.sql:/statements.sql
+      - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       resources:
         limits:

@@ -23,6 +23,10 @@ elif path.startswith('.'):
 API="http://payroll-api:80/api"
 TRANSFER_API="http://transfer-api:80/api"
 LISTENER="http://listener-api:80"
+BOOTSTRAP=kafka:9092
+KSQL="http://ksqldb-server:8088"
+ES="http://elasticsearch:9200"
+CONNECT="http://kafka-connect:8083"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -48,14 +52,31 @@ api_delete() {
   curl -sf -X DELETE "$1" -o /dev/null || fail "DELETE $1 failed"
 }
 
-# ── 1. Clean slate ──────────────────────────────────────────────────────────
+# Execute a single ksqlDB statement. Returns 0 on success, 1 on failure.
+ksql_exec() {
+  local stmt="$1"
+  log "  Executing: $(echo "$stmt" | head -c 80)..."
+  curl -sf -X POST "$KSQL/ksql" \
+    -H 'Content-Type: application/vnd.ksql.v1+json' \
+    -d "{\"ksql\": \"${stmt}\", \"streamsProperties\": {\"auto.offset.reset\": \"earliest\"}}" > /dev/null \
+    && log "    OK" \
+    || { log "    FAILED"; return 1; }
+}
+
+# Parse statements.sql into individual statements
+ksql_statements() {
+  sed 's/--.*$//' /statements.sql | tr '\n' ' ' | sed 's/;/;\n/g' | sed 's/^[[:space:]]*//' | grep -v '^$'
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 1: Clear data stores (MongoDB, MySQL)
+# ══════════════════════════════════════════════════════════════════════════════
 
 log "Installing database client packages..."
 python3 -m pip install --quiet --break-system-packages pymongo mysql-connector-python 2>/dev/null \
   || python3 -m pip install --quiet pymongo mysql-connector-python 2>/dev/null \
   || fail "Could not install Python database packages (pymongo, mysql-connector-python)"
 
-# 1a. Clear MongoDB
 log "Clearing MongoDB (payroll_db)..."
 python3 << 'PYEOF'
 from pymongo import MongoClient
@@ -86,7 +107,6 @@ else:
 client.close()
 PYEOF
 
-# 1b. Clear MySQL + grant replication privileges for Debezium CDC
 log "Clearing MySQL (listener_db)..."
 python3 << 'PYEOF'
 import mysql.connector
@@ -109,30 +129,65 @@ conn = mysql.connector.connect(
     user='listener_user', password='listener_password'
 )
 cursor = conn.cursor()
-try:
-    cursor.execute('DELETE FROM OutboxMessages')
-    conn.commit()
-    print(f"  Deleted {cursor.rowcount} rows from OutboxMessages")
-except mysql.connector.errors.ProgrammingError:
-    print("  OutboxMessages table does not exist yet, skipping")
-try:
-    cursor.execute('DELETE FROM EmployeeRecords')
-    conn.commit()
-    print(f"  Deleted {cursor.rowcount} rows from EmployeeRecords")
-except mysql.connector.errors.ProgrammingError:
-    print("  EmployeeRecords table does not exist yet, skipping")
+for table in ['OutboxMessages', 'TransferRecords', 'EmployeePayAttributes', 'EmployeeRecords']:
+    try:
+        cursor.execute(f'DELETE FROM {table}')
+        conn.commit()
+        print(f"  Deleted {cursor.rowcount} rows from {table}")
+    except mysql.connector.errors.ProgrammingError:
+        print(f"  {table} table does not exist yet, skipping")
 cursor.close()
 conn.close()
 PYEOF
 
-# 1c. Purge Kafka topic data
-# IMPORTANT: We purge (not delete) topics so that Dapr sidecar Kafka producers
-# keep their connections. Deleting topics breaks the outbox → Kafka pipeline
-# until the sidecar is restarted.
-log "Purging Kafka topics..."
-BOOTSTRAP=kafka:9092
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 2: Tear down ksqlDB (BEFORE touching Kafka topics)
+#   ksqlDB objects hold references to topics. Deleting topics while ksqlDB
+#   objects exist leaves ksqlDB in a broken state where DROPs and CREATEs fail.
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Ensure all application topics exist (idempotent, same as kafka-init)
+log "Waiting for ksqlDB server..."
+until curl -sf "$KSQL/info" > /dev/null 2>&1; do
+  sleep 5
+done
+log "  ksqlDB is ready."
+
+# Terminate all running queries so DROP statements can succeed
+log "Terminating existing ksqlDB queries..."
+QUERY_IDS=$(curl -sf "$KSQL/ksql" \
+  -H 'Content-Type: application/vnd.ksql.v1+json' \
+  -d '{"ksql": "SHOW QUERIES;"}' \
+  | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//') || true
+for qid in $QUERY_IDS; do
+  log "  Terminating query $qid"
+  curl -sf -X POST "$KSQL/ksql" \
+    -H 'Content-Type: application/vnd.ksql.v1+json' \
+    -d "{\"ksql\": \"TERMINATE ${qid};\"}" > /dev/null || true
+  sleep 1
+done
+
+# Execute only DROP statements from statements.sql
+# Use DELETE TOPIC on streams/tables that own their topic, but NOT on
+# EMPLOYEE_EVENTS_RAW (external employee-events topic) or
+# EMPLOYEE_NET_PAY_BY_PERIOD (SOURCE TABLE, doesn't own its topic).
+log "Dropping existing ksqlDB objects..."
+while IFS= read -r stmt; do
+  [ -z "$stmt" ] && continue
+  case "$stmt" in
+    DROP*) ksql_exec "$stmt" || true ;;
+  esac
+  sleep 1
+done < <(ksql_statements)
+log "  ksqlDB teardown complete."
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 3: Purge and recreate Kafka topics
+#   Safe now that ksqlDB has no references to these topics.
+# ══════════════════════════════════════════════════════════════════════════════
+
+log "Purging Kafka topics..."
+
+# Ensure all application topics exist (idempotent)
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-events
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic timeentry-events
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic taxinfo-events
@@ -169,20 +224,40 @@ kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions
 log "  Recreated compacted topics (employee-net-pay, employee-search, employee-info)"
 
 # Fix partition count for any topics that were auto-created with 1 partition by consumers
-# (e.g., elasticsearch-updater subscribes to employee-info and employee-net-pay at startup,
-# triggering Kafka auto-creation before seed runs). --alter --partitions is idempotent when
-# the topic already has the target partition count.
 ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events employee-net-pay employee-search employee-info transfer-requests transfer-events"
 for topic in $ALL_TOPICS; do
   kafka-topics --alter --topic $topic --partitions 3 --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 done
 log "  Verified all topics have 3 partitions"
 
+# Restart Kafka-dependent services whose MassTransit consumers fault when
+# subscribed topics are deleted/recreated. The Java services (net-pay-processor,
+# elasticsearch-updater) auto-recover, but listener-api's MassTransit Kafka Rider
+# gets stuck in exponential backoff retries.
+log "Restarting Kafka-dependent services..."
+if [ -S /var/run/docker.sock ]; then
+  curl -sf -X POST "http://localhost/v1.24/containers/listener-api/restart?t=5" \
+    --unix-socket /var/run/docker.sock > /dev/null \
+    && log "  Restarted listener-api" \
+    || log "  Could not restart listener-api (may need manual restart)"
+  # Wait for listener-api to be healthy again
+  until curl -sf "http://listener-api:80/graphql?query=%7B__typename%7D" > /dev/null 2>&1; do
+    sleep 3
+  done
+  log "  listener-api is healthy."
+else
+  log "  Docker socket not available — skip service restart"
+  log "  NOTE: You may need to manually restart listener-api if it has stale Kafka consumers"
+fi
+
 log "Clean slate complete."
 
-# ── 1d. Elasticsearch index setup ────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 4: Set up infrastructure (Elasticsearch, Kafka Connect, ksqlDB)
+#   All backing topics exist and are empty. Create infrastructure on top.
+# ══════════════════════════════════════════════════════════════════════════════
 
-ES="http://elasticsearch:9200"
+# ── Elasticsearch index ──────────────────────────────────────────────────
 
 log "Waiting for Elasticsearch..."
 until curl -sf "$ES/_cluster/health" > /dev/null 2>&1; do
@@ -238,9 +313,7 @@ curl -sf -X PUT "$ES/employee-search" \
   }
 }' > /dev/null && log "  Index created." || log "  Index creation failed."
 
-# ── 1e. Kafka Connect sink connector setup ───────────────────────────────
-
-CONNECT="http://kafka-connect:8083"
+# ── Kafka Connect connectors ────────────────────────────────────────────
 
 log "Waiting for Kafka Connect..."
 until curl -sf "$CONNECT/connectors" > /dev/null 2>&1; do
@@ -309,50 +382,26 @@ curl -sf -X POST "$CONNECT/connectors" \
   }
 }' > /dev/null && log "  Debezium outbox connector registered." || log "  Debezium outbox connector registration failed."
 
-# ── 1f. Initialize ksqlDB streams and tables ─────────────────────────────
+# ── ksqlDB streams and tables ────────────────────────────────────────────
+#   Topics are clean and ready. Create ksqlDB objects on top of them.
 
-KSQL="http://ksqldb-server:8088"
-
-log "Waiting for ksqlDB server..."
-until curl -sf "$KSQL/info" > /dev/null 2>&1; do
-  sleep 5
-done
-log "  ksqlDB is ready."
-
-# Terminate all running queries so DROP statements can succeed
-log "Terminating existing ksqlDB queries..."
-QUERY_IDS=$(curl -sf "$KSQL/ksql" \
-  -H 'Content-Type: application/vnd.ksql.v1+json' \
-  -d '{"ksql": "SHOW QUERIES;"}' \
-  | grep -o '"id":"[^"]*"' | sed 's/"id":"//;s/"//') || true
-for qid in $QUERY_IDS; do
-  log "  Terminating query $qid"
-  curl -sf -X POST "$KSQL/ksql" \
-    -H 'Content-Type: application/vnd.ksql.v1+json' \
-    -d "{\"ksql\": \"TERMINATE ${qid};\"}" > /dev/null || true
-  sleep 1
-done
-
-log "Submitting ksqlDB statements..."
+log "Creating ksqlDB streams and tables..."
 while IFS= read -r stmt; do
   [ -z "$stmt" ] && continue
-  log "  Executing: $(echo "$stmt" | head -c 80)..."
-  curl -sf -X POST "$KSQL/ksql" \
-    -H 'Content-Type: application/vnd.ksql.v1+json' \
-    -d "{\"ksql\": \"${stmt}\", \"streamsProperties\": {\"auto.offset.reset\": \"earliest\"}}" > /dev/null \
-    && log "    OK" \
-    || log "    FAILED"
+  case "$stmt" in
+    CREATE*) ksql_exec "$stmt" || true ;;
+  esac
   sleep 2
-done < <(
-  # Collapse multi-line SQL into single-line statements split by semicolons
-  sed 's/--.*$//' /statements.sql | tr '\n' ' ' | sed 's/;/;\n/g' | sed 's/^[[:space:]]*//' | grep -v '^$'
-)
+done < <(ksql_statements)
 log "  ksqlDB initialization complete."
 
 # Allow ksqlDB consumers to fully start before producing events
 sleep 10
 
-# ── 2. Create employees ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 5: Seed data (parents first, then children)
+#   Order: employees → bank accounts → time entries → tax info → deductions → transfers
+# ══════════════════════════════════════════════════════════════════════════════
 
 log "Creating employees..."
 
@@ -416,10 +465,10 @@ EMP5=$(api_post "$API/employees" -d '{
 EMP5_ID=$(echo "$EMP5" | jq -r '.id')
 log "  Created David Davis (Salary, 32h) — $EMP5_ID"
 
-# Small pause to let Dapr outbox flush employee events before time entries
+# Small pause to let outbox flush employee events before time entries
 sleep 2
 
-# ── 2b. Create bank accounts ──────────────────────────────────────────────
+# ── Bank accounts ────────────────────────────────────────────────────────
 
 log "Waiting for Transfer API..."
 until curl -sf "http://transfer-api:80/api/bankaccounts/employee/00000000-0000-0000-0000-000000000000" > /dev/null 2>&1; do
@@ -479,7 +528,7 @@ BA5=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA5_ID=$(echo "$BA5" | jq -r '.id')
 log "  David Davis — Chase Bank ****7890 — $BA5_ID"
 
-# ── 3. Create time entries for hourly employees ────────────────────────────
+# ── Time entries (hourly employees only) ─────────────────────────────────
 
 # Generate 20 most recent weekdays (Mon-Fri) relative to today, ensuring
 # time entries always fall in the current and previous pay periods.
@@ -523,7 +572,7 @@ create_time_entries "$EMP4_ID" "Emily Brown"
 # Pause to let events propagate
 sleep 2
 
-# ── 4. Create tax information ──────────────────────────────────────────────
+# ── Tax information ──────────────────────────────────────────────────────
 
 log "Creating tax information..."
 
@@ -587,7 +636,7 @@ api_post "$API/taxinformation" -d "{
 }" > /dev/null
 log "  David Davis — Head of Household, IL, extra withholding"
 
-# ── 5. Create deductions ───────────────────────────────────────────────────
+# ── Deductions ───────────────────────────────────────────────────────────
 
 log "Creating deductions..."
 
@@ -649,7 +698,7 @@ api_post "$API/deductions" -d "{
 }" > /dev/null
 log "  Michael Williams — Health (\$250), Vision (\$25), 401k (10%)"
 
-# ── 6. Initiate transfers via Listener API ───────────────────────────────
+# ── Transfers ────────────────────────────────────────────────────────────
 
 log "Initiating transfers via Listener API..."
 
@@ -687,7 +736,9 @@ api_post "$LISTENER/api/Transfer" -d "{
 }" > /dev/null
 log "  Emily Brown — \$150 transfer (period $CURRENT_PAY_PERIOD)"
 
-# ── 7. Verify Elasticsearch ──────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 6: Verify
+# ══════════════════════════════════════════════════════════════════════════════
 
 log "Waiting for Elasticsearch documents to appear..."
 sleep 15
