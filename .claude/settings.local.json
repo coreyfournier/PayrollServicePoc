@@ -16,11 +16,11 @@
       "Bash(docker-compose build:*)",
       "Bash(timeout:*)",
       "Bash(docker compose:*)",
-      "Bash(docker-compose restart:*)",
-      "Bash(docker-compose logs:*)",
-      "Bash(docker wait:*)",
-      "Bash(dotnet test:*)",
-      "Bash(npm test:*)"
+      "Bash(docker inspect:*)",
+      "Bash(docker run:*)",
+      "Bash(sleep:*)",
+      "Bash(docker stop:*)",
+      "Bash(cd:*)"
     ]
   }
 }

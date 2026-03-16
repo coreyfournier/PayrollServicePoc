@@ -11,6 +11,7 @@ public class TransferEventPublisher : ITransferEventPublisher
 {
     private readonly IProducer<string, string> _producer;
     private readonly ILogger<TransferEventPublisher> _logger;
+    private const string TopicName = "transfer-events";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -41,7 +42,7 @@ public class TransferEventPublisher : ITransferEventPublisher
                 Value = messageValue
             };
 
-            var result = await _producer.ProduceAsync("transfer-events", message, cancellationToken);
+            var result = await _producer.ProduceAsync(TopicName, message, cancellationToken);
 
             _logger.LogInformation(
                 "Published transfer event for {TransferId} with status {Status} to partition {Partition}",

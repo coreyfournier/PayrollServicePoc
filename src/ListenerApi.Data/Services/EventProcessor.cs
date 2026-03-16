@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using ListenerApi.Data.Entities;
 using ListenerApi.Data.Repositories;
@@ -208,6 +209,7 @@ public class EventProcessor
 
             existing.Status = newStatus;
             existing.UpdatedAt = DateTime.UtcNow;
+            existing.WorkflowStepsJson = eventData.SerializeWorkflowSteps();
 
             if (newStatus == "Completed")
             {
@@ -239,7 +241,8 @@ public class EventProcessor
                 UpdatedAt = DateTime.UtcNow,
                 CompletedAt = newStatus == "Completed" ? DateTime.UtcNow : null,
                 ExternalReferenceId = eventData.ExternalReferenceId,
-                FailureReason = eventData.FailureReason
+                FailureReason = eventData.FailureReason,
+                WorkflowStepsJson = eventData.SerializeWorkflowSteps()
             };
 
             await _transferRecordRepository.AddAsync(record);
@@ -343,9 +346,21 @@ public class TransferEventPayload
     public string? FailureReason { get; set; }
     public decimal? CurrentBalance { get; set; }
     public string? Status { get; set; }
+    public List<WorkflowStepPayload>? WorkflowSteps { get; set; }
 
     // Nested domain events
     public List<DomainEventInfo>? DomainEvents { get; set; }
+
+    public string? SerializeWorkflowSteps()
+    {
+        if (WorkflowSteps == null || WorkflowSteps.Count == 0)
+            return null;
+        return JsonSerializer.Serialize(WorkflowSteps, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = null,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        });
+    }
 
     public (Guid TransferId, Guid EmployeeId, string EventType) ResolveTransferInfo()
     {
@@ -427,4 +442,14 @@ public class NetPayEventPayload
 
     [JsonPropertyName("PAY_PERIOD_END")]
     public string? PayPeriodEnd { get; set; }
+}
+
+public class WorkflowStepPayload
+{
+    public string Name { get; set; } = string.Empty;
+    public string Status { get; set; } = "Pending";
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public string? Detail { get; set; }
+    public int RetryCount { get; set; }
 }

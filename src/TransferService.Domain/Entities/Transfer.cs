@@ -1,6 +1,7 @@
 using TransferService.Domain.Common;
 using TransferService.Domain.Enums;
 using TransferService.Domain.Events;
+using TransferService.Domain.ValueObjects;
 
 namespace TransferService.Domain.Entities;
 
@@ -16,6 +17,7 @@ public class Transfer : Entity
     public string? FailureReason { get; private set; }
     public string? ExternalReferenceId { get; private set; }
     public decimal? CurrentBalance { get; private set; }
+    public List<WorkflowStep> WorkflowSteps { get; private set; } = new();
 
     private Transfer() { }
 
@@ -42,9 +44,71 @@ public class Transfer : Entity
         if (transferId.HasValue)
             transfer.Id = transferId.Value;
 
+        transfer.WorkflowSteps.Add(new WorkflowStep
+        {
+            Name = WorkflowStep.Names.Validation,
+            Status = WorkflowStep.Statuses.InProgress,
+            StartedAt = DateTime.UtcNow
+        });
+        transfer.WorkflowSteps.Add(new WorkflowStep
+        {
+            Name = WorkflowStep.Names.BalanceCheck,
+            Status = WorkflowStep.Statuses.Pending
+        });
+
         transfer.AddDomainEvent(new TransferInitiatedEvent(
             transfer.Id, employeeId, amount, payPeriodNumber, bankAccountId));
         return transfer;
+    }
+
+    public void StartWorkflowStep(string name)
+    {
+        var step = WorkflowSteps.Find(s => s.Name == name);
+        if (step != null)
+        {
+            step.Status = WorkflowStep.Statuses.InProgress;
+            step.StartedAt = DateTime.UtcNow;
+        }
+    }
+
+    public void CompleteWorkflowStep(string name, string? detail = null)
+    {
+        var step = WorkflowSteps.Find(s => s.Name == name);
+        if (step != null)
+        {
+            step.Status = WorkflowStep.Statuses.Completed;
+            step.CompletedAt = DateTime.UtcNow;
+            if (detail != null)
+                step.Detail = detail;
+        }
+    }
+
+    public void FailWorkflowStep(string name, string detail)
+    {
+        var step = WorkflowSteps.Find(s => s.Name == name);
+        if (step != null)
+        {
+            step.Status = WorkflowStep.Statuses.Failed;
+            step.CompletedAt = DateTime.UtcNow;
+            step.Detail = detail;
+        }
+    }
+
+    public void AddWorkflowStep(string name, string status)
+    {
+        WorkflowSteps.Add(new WorkflowStep
+        {
+            Name = name,
+            Status = status,
+            StartedAt = status == WorkflowStep.Statuses.InProgress ? DateTime.UtcNow : null
+        });
+    }
+
+    public void IncrementWorkflowStepRetry(string name)
+    {
+        var step = WorkflowSteps.Find(s => s.Name == name);
+        if (step != null)
+            step.RetryCount++;
     }
 
     public void MarkProcessing()
