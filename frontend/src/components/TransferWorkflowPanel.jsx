@@ -7,6 +7,7 @@ const WORKFLOW_STEPS = [
   { key: 'validate', label: 'Validate', activity: 'ValidateTransferActivity' },
   { key: 'balance', label: 'Verify Balance', activity: 'VerifyBalanceActivity' },
   { key: 'awaiting', label: 'Awaiting Confirmation', activity: 'MarkAwaitingConfirmationActivity' },
+  { key: 'fraud', label: 'Fraud Check', activity: 'FraudCheckActivity' },
   { key: 'processing', label: 'Processing', activity: 'UpdateTransferStatusActivity' },
   { key: 'bank', label: 'Bank Transfer', activity: 'ExecuteBankTransferActivity' },
   { key: 'complete', label: 'Complete', activity: 'CompleteTransferActivity' },

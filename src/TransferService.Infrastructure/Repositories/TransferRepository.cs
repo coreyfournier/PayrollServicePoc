@@ -61,13 +61,14 @@ public class TransferRepository : ITransferRepository
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<bool> HasInProgressTransferAsync(Guid employeeId, CancellationToken cancellationToken = default)
+    public async Task<bool> HasInProgressTransferAsync(Guid employeeId, Guid? excludeTransferId = null, CancellationToken cancellationToken = default)
     {
         var inProgressStatuses = new[] { TransferStatus.Initiated, TransferStatus.Processing, TransferStatus.AwaitingConfirmation };
-        var count = await _dbContext.Transfers.CountDocumentsAsync(
-            t => t.EmployeeId == employeeId && inProgressStatuses.Contains(t.Status),
-            new CountOptions { Limit = 1 },
-            cancellationToken);
+        var builder = Builders<Transfer>.Filter;
+        var filter = builder.Eq(t => t.EmployeeId, employeeId) & builder.In(t => t.Status, inProgressStatuses);
+        if (excludeTransferId.HasValue)
+            filter &= builder.Ne(t => t.Id, excludeTransferId.Value);
+        var count = await _dbContext.Transfers.CountDocumentsAsync(filter, new CountOptions { Limit = 1 }, cancellationToken);
         return count > 0;
     }
 

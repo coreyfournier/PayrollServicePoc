@@ -56,6 +56,15 @@ public class TransferMongoDbContext
             RegisterClassMap<BankAccountUpdatedEvent>();
             RegisterClassMap<BankAccountDeactivatedEvent>();
 
+            if (!BsonClassMap.IsClassMapRegistered(typeof(EmployeeTransferLimits)))
+            {
+                BsonClassMap.RegisterClassMap<EmployeeTransferLimits>(cm =>
+                {
+                    cm.AutoMap();
+                    cm.MapIdMember(x => x.EmployeeId);
+                });
+            }
+
             if (!BsonClassMap.IsClassMapRegistered(typeof(WorkflowStep)))
             {
                 BsonClassMap.RegisterClassMap<WorkflowStep>(cm =>
@@ -119,9 +128,6 @@ public class TransferMongoDbContext
         await BankAccounts.Indexes.CreateOneAsync(
             new CreateIndexModel<BankAccount>(Builders<BankAccount>.IndexKeys.Ascending(a => a.EmployeeId)));
 
-        await EmployeeTransferLimits.Indexes.CreateOneAsync(
-            new CreateIndexModel<EmployeeTransferLimits>(
-                Builders<EmployeeTransferLimits>.IndexKeys.Ascending(l => l.EmployeeId),
-                new CreateIndexOptions { Unique = true }));
+        // EmployeeId is mapped as _id, so it's inherently unique — no extra index needed.
     }
 }

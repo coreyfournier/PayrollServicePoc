@@ -8,8 +8,8 @@ public class SimulatedBankService : IBankTransferService
 
     public async Task<BankTransferResult> ExecuteTransferAsync(Guid transferId, decimal amount, Guid bankAccountId)
     {
-        // Simulate bank processing time (1-10 seconds)
-        await Task.Delay(Random.Next(1000, 10000));
+        // Simulate bank processing time (1-5 seconds)
+        await Task.Delay(Random.Next(1000, 5000));
 
         // ~20% failure rate
         if (Random.NextDouble() < 0.2)

@@ -14,18 +14,6 @@ public class EventProcessor
     private readonly ISubscriptionPublisher _subscriptionPublisher;
     private readonly ILogger<EventProcessor> _logger;
 
-    private static readonly Dictionary<string, int> StatusOrder = new()
-    {
-        ["Queued"] = 0,
-        ["Initiated"] = 1,
-        ["AwaitingConfirmation"] = 2,
-        ["AcceptPending"] = 2,
-        ["RejectPending"] = 2,
-        ["Processing"] = 3,
-        ["Completed"] = 4,
-        ["Failed"] = 4
-    };
-
     public EventProcessor(
         IEmployeeRecordRepository repository,
         IEmployeePayAttributesRepository payAttributesRepository,
@@ -195,35 +183,25 @@ public class EventProcessor
 
         var existing = await _transferRecordRepository.GetByIdAsync(transferId);
 
+        var eventTime = eventData.UpdatedAt;
+
         if (existing != null)
         {
-            // Idempotency: status only advances forward
-            var existingOrder = StatusOrder.GetValueOrDefault(existing.Status, -1);
-            var newOrder = StatusOrder.GetValueOrDefault(newStatus, -1);
-            if (newOrder <= existingOrder)
+            // Idempotency: only process if the event is newer than what we have
+            if (eventTime != default && eventTime <= existing.UpdatedAt)
             {
-                _logger.LogInformation("Skipping transfer event — status {NewStatus} not newer than {ExistingStatus}",
-                    newStatus, existing.Status);
+                _logger.LogInformation("Skipping transfer event — event time {EventTime} not newer than existing {ExistingTime}",
+                    eventTime, existing.UpdatedAt);
                 return;
             }
 
             existing.Status = newStatus;
-            existing.UpdatedAt = DateTime.UtcNow;
+            existing.UpdatedAt = eventTime != default ? eventTime : DateTime.UtcNow;
             existing.WorkflowStepsJson = eventData.SerializeWorkflowSteps();
-
-            if (newStatus == "Completed")
-            {
-                existing.CompletedAt = DateTime.UtcNow;
-                existing.ExternalReferenceId = eventData.ExternalReferenceId;
-            }
-            else if (newStatus == "Failed")
-            {
-                existing.FailureReason = eventData.FailureReason;
-            }
-            else if (newStatus == "AwaitingConfirmation")
-            {
-                existing.CurrentBalance = eventData.CurrentBalance;
-            }
+            existing.ExternalReferenceId = eventData.ExternalReferenceId;
+            existing.FailureReason = eventData.FailureReason;
+            existing.CurrentBalance = eventData.CurrentBalance;
+            existing.CompletedAt = newStatus == "Completed" ? DateTime.UtcNow : existing.CompletedAt;
 
             await _transferRecordRepository.UpdateAsync(existing);
         }
@@ -237,11 +215,12 @@ public class EventProcessor
                 Amount = eventData.Amount,
                 PayPeriodNumber = eventData.PayPeriodNumber,
                 Status = newStatus,
-                InitiatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
+                InitiatedAt = eventTime != default ? eventTime : DateTime.UtcNow,
+                UpdatedAt = eventTime != default ? eventTime : DateTime.UtcNow,
                 CompletedAt = newStatus == "Completed" ? DateTime.UtcNow : null,
                 ExternalReferenceId = eventData.ExternalReferenceId,
                 FailureReason = eventData.FailureReason,
+                CurrentBalance = eventData.CurrentBalance,
                 WorkflowStepsJson = eventData.SerializeWorkflowSteps()
             };
 
@@ -346,6 +325,7 @@ public class TransferEventPayload
     public string? FailureReason { get; set; }
     public decimal? CurrentBalance { get; set; }
     public string? Status { get; set; }
+    public DateTime UpdatedAt { get; set; }
     public List<WorkflowStepPayload>? WorkflowSteps { get; set; }
 
     // Nested domain events

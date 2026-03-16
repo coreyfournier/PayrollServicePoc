@@ -19,19 +19,5 @@ public class TransferState : SagaStateMachineInstance, ISagaVersion
     public string? FailureReason { get; set; }
     public int RetryCount { get; set; }
     public Guid? ConfirmationTimeoutTokenId { get; set; }
-
-    /// <summary>
-    /// Used for inline branching during message processing.
-    /// </summary>
-    public TransferOutcome TransferOutcome { get; set; }
-    public string? OutcomeDetail { get; set; }
-    public bool? BankTransferSucceeded { get; set; }
-}
-
-public enum TransferOutcome
-{
-    Pending = 0,
-    ValidationFailed = 1,
-    BalanceSufficient = 2,
-    BalanceInsufficient = 3
+    public Guid? RetryBankTransferTokenId { get; set; }
 }

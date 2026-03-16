@@ -25,16 +25,22 @@ public class TransferTests
     }
 
     [Fact]
-    public void Create_ShouldInitializeWorkflowSteps()
+    public void Create_ShouldInitializeAllWorkflowSteps()
     {
         var transfer = Transfer.Create(_employeeId, 500m, 55, _bankAccountId);
 
-        transfer.WorkflowSteps.Should().HaveCount(2);
+        transfer.WorkflowSteps.Should().HaveCount(5);
         transfer.WorkflowSteps[0].Name.Should().Be(WorkflowStep.Names.Validation);
         transfer.WorkflowSteps[0].Status.Should().Be(WorkflowStep.Statuses.InProgress);
         transfer.WorkflowSteps[0].StartedAt.Should().NotBeNull();
         transfer.WorkflowSteps[1].Name.Should().Be(WorkflowStep.Names.BalanceCheck);
         transfer.WorkflowSteps[1].Status.Should().Be(WorkflowStep.Statuses.Pending);
+        transfer.WorkflowSteps[2].Name.Should().Be(WorkflowStep.Names.FraudCheck);
+        transfer.WorkflowSteps[2].Status.Should().Be(WorkflowStep.Statuses.Pending);
+        transfer.WorkflowSteps[3].Name.Should().Be(WorkflowStep.Names.BankTransfer);
+        transfer.WorkflowSteps[3].Status.Should().Be(WorkflowStep.Statuses.Pending);
+        transfer.WorkflowSteps[4].Name.Should().Be(WorkflowStep.Names.Complete);
+        transfer.WorkflowSteps[4].Status.Should().Be(WorkflowStep.Statuses.Pending);
     }
 
     [Fact]
@@ -153,11 +159,11 @@ public class TransferTests
     {
         var transfer = Transfer.Create(_employeeId, 500m, 55, _bankAccountId);
 
-        transfer.AddWorkflowStep(WorkflowStep.Names.BankTransfer, WorkflowStep.Statuses.InProgress);
+        transfer.AddWorkflowStep("CustomStep", WorkflowStep.Statuses.InProgress);
 
-        transfer.WorkflowSteps.Should().HaveCount(3);
-        var step = transfer.WorkflowSteps[2];
-        step.Name.Should().Be(WorkflowStep.Names.BankTransfer);
+        transfer.WorkflowSteps.Should().HaveCount(6);
+        var step = transfer.WorkflowSteps[5];
+        step.Name.Should().Be("CustomStep");
         step.Status.Should().Be(WorkflowStep.Statuses.InProgress);
         step.StartedAt.Should().NotBeNull();
     }
@@ -167,9 +173,9 @@ public class TransferTests
     {
         var transfer = Transfer.Create(_employeeId, 500m, 55, _bankAccountId);
 
-        transfer.AddWorkflowStep(WorkflowStep.Names.Complete, WorkflowStep.Statuses.Pending);
+        transfer.AddWorkflowStep("CustomStep", WorkflowStep.Statuses.Pending);
 
-        var step = transfer.WorkflowSteps.Find(s => s.Name == WorkflowStep.Names.Complete)!;
+        var step = transfer.WorkflowSteps.Find(s => s.Name == "CustomStep")!;
         step.StartedAt.Should().BeNull();
     }
 
@@ -177,7 +183,6 @@ public class TransferTests
     public void IncrementWorkflowStepRetry_ShouldIncrementRetryCount()
     {
         var transfer = Transfer.Create(_employeeId, 500m, 55, _bankAccountId);
-        transfer.AddWorkflowStep(WorkflowStep.Names.BankTransfer, WorkflowStep.Statuses.InProgress);
 
         transfer.IncrementWorkflowStepRetry(WorkflowStep.Names.BankTransfer);
         transfer.IncrementWorkflowStepRetry(WorkflowStep.Names.BankTransfer);
@@ -195,14 +200,15 @@ public class TransferTests
         transfer.CompleteWorkflowStep(WorkflowStep.Names.Validation);
         // Balance check passes
         transfer.CompleteWorkflowStep(WorkflowStep.Names.BalanceCheck);
-        // Add remaining steps
-        transfer.AddWorkflowStep(WorkflowStep.Names.BankTransfer, WorkflowStep.Statuses.InProgress);
-        transfer.AddWorkflowStep(WorkflowStep.Names.Complete, WorkflowStep.Statuses.Pending);
+        // Fraud check passes
+        transfer.StartWorkflowStep(WorkflowStep.Names.FraudCheck);
+        transfer.CompleteWorkflowStep(WorkflowStep.Names.FraudCheck);
         // Bank transfer completes
+        transfer.StartWorkflowStep(WorkflowStep.Names.BankTransfer);
         transfer.CompleteWorkflowStep(WorkflowStep.Names.BankTransfer);
         transfer.CompleteWorkflowStep(WorkflowStep.Names.Complete);
 
-        transfer.WorkflowSteps.Should().HaveCount(4);
+        transfer.WorkflowSteps.Should().HaveCount(5);
         transfer.WorkflowSteps.Should().OnlyContain(s => s.Status == WorkflowStep.Statuses.Completed);
     }
 
@@ -215,12 +221,11 @@ public class TransferTests
         transfer.CompleteWorkflowStep(WorkflowStep.Names.Validation);
         // Balance insufficient
         transfer.CompleteWorkflowStep(WorkflowStep.Names.BalanceCheck, "Balance $200.00 is less than transfer amount");
+        // AwaitingConfirmation is a conditional step added by the saga
         transfer.AddWorkflowStep(WorkflowStep.Names.AwaitingConfirmation, WorkflowStep.Statuses.InProgress);
-        transfer.AddWorkflowStep(WorkflowStep.Names.BankTransfer, WorkflowStep.Statuses.Pending);
-        transfer.AddWorkflowStep(WorkflowStep.Names.Complete, WorkflowStep.Statuses.Pending);
 
-        transfer.WorkflowSteps.Should().HaveCount(5);
-        transfer.WorkflowSteps[2].Name.Should().Be(WorkflowStep.Names.AwaitingConfirmation);
-        transfer.WorkflowSteps[2].Status.Should().Be(WorkflowStep.Statuses.InProgress);
+        transfer.WorkflowSteps.Should().HaveCount(6);
+        var awaitingStep = transfer.WorkflowSteps.Find(s => s.Name == WorkflowStep.Names.AwaitingConfirmation)!;
+        awaitingStep.Status.Should().Be(WorkflowStep.Statuses.InProgress);
     }
 }

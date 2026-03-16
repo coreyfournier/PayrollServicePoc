@@ -929,7 +929,6 @@ header {
   border-radius: var(--radius);
   border-left: 4px solid var(--border);
   background: var(--surface);
-  overflow: hidden;
 }
 
 .transfer-card.transfer-status-success { border-left-color: #059669; }

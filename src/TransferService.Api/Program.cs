@@ -45,13 +45,7 @@ builder.Services.AddSingleton<IMongoDatabase>(sp =>
 });
 
 var kafkaBootstrapServers = builder.Configuration.GetValue<string>("Kafka:BootstrapServers") ?? "kafka:9092";
-
-// Register Confluent.Kafka producer for direct Kafka publishing (CloudEvent format)
-builder.Services.AddSingleton<Confluent.Kafka.IProducer<string, string>>(sp =>
-{
-    var config = new Confluent.Kafka.ProducerConfig { BootstrapServers = kafkaBootstrapServers };
-    return new Confluent.Kafka.ProducerBuilder<string, string>(config).Build();
-});
+var rabbitMqHost = builder.Configuration.GetValue<string>("RabbitMQ:Host") ?? "rabbitmq";
 
 // Register BSON serializers (including GuidSerializer) before MassTransit accesses MongoDB
 TransferMongoDbContext.EnsureSerializersRegistered();
@@ -68,6 +62,11 @@ if (!BsonClassMap.IsClassMapRegistered(typeof(TransferState)))
 
 builder.Services.AddMassTransit(x =>
 {
+    x.AddConsumer<RunBalanceCheckConsumer>();
+    x.AddConsumer<RunFraudCheckConsumer>();
+    x.AddConsumer<RunBankTransferConsumer>();
+    x.AddConsumer<TransferKafkaBridgeConsumer>();
+
     x.AddSagaStateMachine<TransferStateMachine, TransferState>()
         .MongoDbRepository(r =>
         {
@@ -76,8 +75,25 @@ builder.Services.AddMassTransit(x =>
             r.CollectionName = "transfer_sagas";
         });
 
-    x.UsingInMemory((context, cfg) =>
+    x.SetKebabCaseEndpointNameFormatter();
+
+    x.AddDelayedMessageScheduler();
+
+    x.UsingRabbitMq((context, cfg) =>
     {
+        cfg.Host(rabbitMqHost, "/", h =>
+        {
+            h.Username("guest");
+            h.Password("guest");
+        });
+
+        cfg.UseDelayedMessageScheduler();
+        cfg.UseDelayedRedelivery(r => r.Intervals(
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromSeconds(4),
+            TimeSpan.FromSeconds(8)));
+        cfg.UseMessageRetry(r => r.Interval(3, TimeSpan.FromSeconds(1)));
+
         cfg.ConfigureEndpoints(context);
     });
 

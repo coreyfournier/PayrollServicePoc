@@ -13,7 +13,6 @@ export default function TransferPanel({ employee, onClose, onBack }) {
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
   const [form, setForm] = useState({ bankAccountId: '' });
   const [selectedAmount, setSelectedAmount] = useState(null);
   const [customAmount, setCustomAmount] = useState('');
@@ -68,7 +67,6 @@ export default function TransferPanel({ employee, onClose, onBack }) {
   const handleSubmit = useCallback(async (e) => {
     e.preventDefault();
     setError(null);
-    setSuccess(null);
     setSubmitting(true);
 
     try {
@@ -88,7 +86,21 @@ export default function TransferPanel({ employee, onClose, onBack }) {
         throw new Error(text || `HTTP ${res.status}`);
       }
 
-      setSuccess('Transfer queued successfully');
+      const data = await res.json();
+      // Insert placeholder entry into history — replaced by subscription when real events arrive
+      setTransfers(prev => [{
+        id: data.id,
+        employeeId: employee.id,
+        amount: customAmount ? parseFloat(customAmount) : selectedAmount,
+        payPeriodNumber: parseInt(payPeriod, 10),
+        status: 'Queued',
+        initiatedAt: new Date().toISOString(),
+        completedAt: null,
+        failureReason: null,
+        externalReferenceId: null,
+        currentBalance: null,
+        workflowSteps: null,
+      }, ...prev]);
       setSelectedAmount(null);
       setCustomAmount('');
     } catch (err) {
@@ -154,7 +166,6 @@ export default function TransferPanel({ employee, onClose, onBack }) {
         </div>
 
         {error && <div className="transfer-error">{error}</div>}
-        {success && <div className="transfer-success">{success}</div>}
 
         {/* New Transfer Form */}
         <form className="transfer-form" onSubmit={handleSubmit}>
@@ -256,6 +267,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
                               {step.name === 'BankTransfer' ? 'Bank Transfer' :
                                step.name === 'BalanceCheck' ? 'Balance Check' :
                                step.name === 'AwaitingConfirmation' ? 'Confirmation' :
+                               step.name === 'FraudCheck' ? 'Fraud Check' :
                                step.name}
                             </span>
                             {step.name === 'BankTransfer' && step.retryCount > 0 && (

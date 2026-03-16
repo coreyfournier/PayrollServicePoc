@@ -14,6 +14,7 @@ public class WorkflowStep
         public const string Validation = "Validation";
         public const string BalanceCheck = "BalanceCheck";
         public const string AwaitingConfirmation = "AwaitingConfirmation";
+        public const string FraudCheck = "FraudCheck";
         public const string BankTransfer = "BankTransfer";
         public const string Complete = "Complete";
     }

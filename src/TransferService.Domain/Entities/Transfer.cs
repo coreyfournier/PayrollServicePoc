@@ -55,6 +55,21 @@ public class Transfer : Entity
             Name = WorkflowStep.Names.BalanceCheck,
             Status = WorkflowStep.Statuses.Pending
         });
+        transfer.WorkflowSteps.Add(new WorkflowStep
+        {
+            Name = WorkflowStep.Names.FraudCheck,
+            Status = WorkflowStep.Statuses.Pending
+        });
+        transfer.WorkflowSteps.Add(new WorkflowStep
+        {
+            Name = WorkflowStep.Names.BankTransfer,
+            Status = WorkflowStep.Statuses.Pending
+        });
+        transfer.WorkflowSteps.Add(new WorkflowStep
+        {
+            Name = WorkflowStep.Names.Complete,
+            Status = WorkflowStep.Statuses.Pending
+        });
 
         transfer.AddDomainEvent(new TransferInitiatedEvent(
             transfer.Id, employeeId, amount, payPeriodNumber, bankAccountId));

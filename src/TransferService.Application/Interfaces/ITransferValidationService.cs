@@ -4,7 +4,8 @@ public record TransferValidationRequest(
     Guid EmployeeId,
     decimal Amount,
     long PayPeriodNumber,
-    Guid BankAccountId);
+    Guid BankAccountId,
+    Guid? TransferId = null);
 
 public record TransferValidationResult(
     bool CanTransfer,

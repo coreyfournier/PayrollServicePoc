@@ -31,7 +31,7 @@ public class TransferValidationService : ITransferValidationService
         var reasons = new List<string>();
 
         // In-progress transfer check
-        var hasInProgress = await _transferRepository.HasInProgressTransferAsync(request.EmployeeId, cancellationToken);
+        var hasInProgress = await _transferRepository.HasInProgressTransferAsync(request.EmployeeId, request.TransferId, cancellationToken);
         if (hasInProgress)
         {
             reasons.Add("A transfer is already in progress for this employee.");
