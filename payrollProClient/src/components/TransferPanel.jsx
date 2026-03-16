@@ -236,6 +236,42 @@ export default function TransferPanel({ employee, onClose, onBack }) {
                     </span>
                     <span className="transfer-card-amount">{formatCurrency(t.amount)}</span>
                   </div>
+                  {t.workflowSteps && t.workflowSteps.length > 0 && (
+                    <div className="workflow-steps">
+                      {t.workflowSteps.map((step, i) => (
+                        <div key={step.name} className={`workflow-step workflow-step-${step.status.toLowerCase()}`}>
+                          <div className="workflow-step-indicator">
+                            {step.status === 'Completed' && <span className="workflow-icon completed">&#10003;</span>}
+                            {step.status === 'InProgress' && <span className="workflow-icon in-progress" />}
+                            {step.status === 'Failed' && <span className="workflow-icon failed">&#10005;</span>}
+                            {step.status === 'Pending' && <span className="workflow-icon pending" />}
+                            {i < t.workflowSteps.length - 1 && (
+                              <div className={`workflow-connector ${
+                                step.status === 'Completed' ? 'completed' : ''
+                              }`} />
+                            )}
+                          </div>
+                          <div className="workflow-step-content">
+                            <span className="workflow-step-name">
+                              {step.name === 'BankTransfer' ? 'Bank Transfer' :
+                               step.name === 'BalanceCheck' ? 'Balance Check' :
+                               step.name === 'AwaitingConfirmation' ? 'Confirmation' :
+                               step.name}
+                            </span>
+                            {step.name === 'BankTransfer' && step.retryCount > 0 && (
+                              <span className="workflow-step-retry">Attempt {step.retryCount + 1}/3</span>
+                            )}
+                            {step.detail && step.status === 'Failed' && (
+                              <span className="workflow-step-detail">{step.detail}</span>
+                            )}
+                            {step.completedAt && (
+                              <span className="workflow-step-time">{new Date(step.completedAt).toLocaleTimeString()}</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="transfer-card-details">
                     <div className="transfer-card-row">
                       <span className="transfer-card-label">Initiated</span>

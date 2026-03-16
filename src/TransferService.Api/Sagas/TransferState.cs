@@ -20,7 +20,18 @@ public class TransferState : SagaStateMachineInstance, ISagaVersion
     public int RetryCount { get; set; }
     public Guid? ConfirmationTimeoutTokenId { get; set; }
 
-    // Transient flags for inline branching (not persisted meaningfully)
-    public bool ValidationFailed { get; set; }
-    public bool BalanceInsufficient { get; set; }
+    /// <summary>
+    /// Used for inline branching during message processing.
+    /// </summary>
+    public TransferOutcome TransferOutcome { get; set; }
+    public string? OutcomeDetail { get; set; }
+    public bool? BankTransferSucceeded { get; set; }
+}
+
+public enum TransferOutcome
+{
+    Pending = 0,
+    ValidationFailed = 1,
+    BalanceSufficient = 2,
+    BalanceInsufficient = 3
 }

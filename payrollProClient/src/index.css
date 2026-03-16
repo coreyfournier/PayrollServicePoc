@@ -1004,6 +1004,135 @@ header {
   font-weight: 500;
 }
 
+/* ─── Workflow Steps ─── */
+.workflow-steps {
+  display: flex;
+  padding: 12px 14px 8px;
+  gap: 0;
+  overflow-x: auto;
+}
+
+.workflow-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.workflow-step-indicator {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+
+.workflow-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.workflow-icon.completed {
+  background: var(--success);
+  color: white;
+}
+
+.workflow-icon.in-progress {
+  background: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+  animation: pulse-workflow 2s ease-in-out infinite;
+}
+
+.workflow-icon.failed {
+  background: var(--danger);
+  color: white;
+}
+
+.workflow-icon.pending {
+  background: var(--border);
+  border: 2px solid var(--border);
+}
+
+.workflow-connector {
+  position: absolute;
+  top: 50%;
+  left: calc(50% + 12px);
+  right: calc(-50% + 12px);
+  height: 2px;
+  background: var(--border);
+  transform: translateY(-50%);
+}
+
+.workflow-connector.completed {
+  background: var(--success);
+}
+
+.workflow-step-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  text-align: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.workflow-step-name {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.workflow-step-completed .workflow-step-name { color: #065f46; }
+.workflow-step-inprogress .workflow-step-name { color: var(--primary); }
+.workflow-step-failed .workflow-step-name { color: #991b1b; }
+
+.workflow-step-retry {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--warning);
+  background: var(--warning-light);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.workflow-step-detail {
+  font-size: 9px;
+  color: #dc2626;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-step-time {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+}
+
+@keyframes pulse-workflow {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); }
+  50% { box-shadow: 0 0 0 5px rgba(99, 102, 241, 0.1); }
+}
+
 /* ─── Transfer Indicator Column ─── */
 .transfer-indicator-cell {
   white-space: nowrap;

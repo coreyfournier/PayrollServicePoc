@@ -6,6 +6,7 @@ using TransferService.Domain.Common;
 using TransferService.Domain.Entities;
 using TransferService.Domain.Enums;
 using TransferService.Domain.Events;
+using TransferService.Domain.ValueObjects;
 
 namespace TransferService.Infrastructure.Persistence;
 
@@ -17,10 +18,16 @@ public class TransferMongoDbContext
 
     public TransferMongoDbContext(string connectionString, string databaseName)
     {
-        RegisterSerializers();
+        EnsureSerializersRegistered();
         var client = new MongoClient(connectionString);
         _database = client.GetDatabase(databaseName);
     }
+
+    /// <summary>
+    /// Call before MassTransit MongoDB saga initialization to ensure
+    /// GuidSerializer is configured before any MongoDB driver access.
+    /// </summary>
+    public static void EnsureSerializersRegistered() => RegisterSerializers();
 
     private static void RegisterSerializers()
     {
@@ -49,7 +56,17 @@ public class TransferMongoDbContext
             RegisterClassMap<BankAccountUpdatedEvent>();
             RegisterClassMap<BankAccountDeactivatedEvent>();
 
+            if (!BsonClassMap.IsClassMapRegistered(typeof(WorkflowStep)))
+            {
+                BsonClassMap.RegisterClassMap<WorkflowStep>(cm =>
+                {
+                    cm.AutoMap();
+                });
+            }
+
             // Register GuidSerializer with Standard representation so LINQ filters work
+            // MongoDB Driver v3 defaults GuidRepresentation to Unspecified which throws on serialize.
+            // Register with Standard (RFC 4122 byte order) for compatibility.
             BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
 
             var objectSerializer = new ObjectSerializer(type => ObjectSerializer.AllAllowedTypes(type));

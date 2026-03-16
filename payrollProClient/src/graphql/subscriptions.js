@@ -54,6 +54,14 @@ export const TRANSFER_CHANGE_SUBSCRIPTION = `
         failureReason
         externalReferenceId
         updatedAt
+        workflowSteps {
+          name
+          status
+          startedAt
+          completedAt
+          detail
+          retryCount
+        }
       }
       changeType
       timestamp

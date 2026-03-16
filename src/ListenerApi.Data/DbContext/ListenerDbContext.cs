@@ -68,6 +68,8 @@ public class ListenerDbContext : Microsoft.EntityFrameworkCore.DbContext
             entity.Property(e => e.FailureReason).HasMaxLength(500);
             entity.Property(e => e.CurrentBalance).HasPrecision(18, 2);
             entity.Property(e => e.ExternalReferenceId).HasMaxLength(100);
+            entity.Property(e => e.WorkflowStepsJson).HasColumnType("json");
+            entity.Ignore(e => e.WorkflowSteps);
             entity.HasIndex(e => new { e.EmployeeId, e.PayPeriodNumber });
             entity.HasIndex(e => new { e.EmployeeId, e.InitiatedAt });
         });

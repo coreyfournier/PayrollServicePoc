@@ -1,4 +1,6 @@
+using Confluent.Kafka;
 using MassTransit;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using TransferService.Api.Consumers;
 using TransferService.Api.Sagas;
@@ -51,6 +53,19 @@ builder.Services.AddSingleton<Confluent.Kafka.IProducer<string, string>>(sp =>
     return new Confluent.Kafka.ProducerBuilder<string, string>(config).Build();
 });
 
+// Register BSON serializers (including GuidSerializer) before MassTransit accesses MongoDB
+TransferMongoDbContext.EnsureSerializersRegistered();
+
+// Map TransferState so MassTransit saga repo uses CorrelationId as _id
+if (!BsonClassMap.IsClassMapRegistered(typeof(TransferState)))
+{
+    BsonClassMap.RegisterClassMap<TransferState>(cm =>
+    {
+        cm.AutoMap();
+        cm.MapIdProperty(x => x.CorrelationId);
+    });
+}
+
 builder.Services.AddMassTransit(x =>
 {
     x.AddSagaStateMachine<TransferStateMachine, TransferState>()
@@ -83,6 +98,13 @@ builder.Services.AddMassTransit(x =>
             });
         });
     });
+});
+
+// Confluent Kafka producer for transfer-events (same pattern as PayrollService)
+builder.Services.AddSingleton<IProducer<string, string>>(sp =>
+{
+    var config = new ProducerConfig { BootstrapServers = kafkaBootstrapServers };
+    return new ProducerBuilder<string, string>(config).Build();
 });
 
 var app = builder.Build();

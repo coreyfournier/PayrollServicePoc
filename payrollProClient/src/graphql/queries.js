@@ -51,6 +51,14 @@ export const GET_TRANSFERS_BY_EMPLOYEE = `
       externalReferenceId
       currentBalance
       updatedAt
+      workflowSteps {
+        name
+        status
+        startedAt
+        completedAt
+        detail
+        retryCount
+      }
     }
   }
 `;
