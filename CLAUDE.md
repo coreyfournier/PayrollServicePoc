@@ -275,7 +275,8 @@ The transfer feature is a **separate bounded context** (`TransferService.*`) wit
 ListenerApi uses the **Debezium Outbox Pattern** — an industry-standard approach used by Netflix, Airbnb, WePay, and Zalando. A single MySQL transaction atomically writes the `TransferRecord` (client read model) and an `OutboxMessage` (command envelope). Debezium's MySQL CDC connector tails the binlog and routes each outbox row to the Kafka topic specified in the row's `Topic` column, using `AggregateId` as the Kafka message key (preserving per-employee ordering). This guarantees:
 - **Atomicity** — both succeed or both fail in one MySQL transaction
 - **Guaranteed delivery** — Debezium handles publish, retry, and offset tracking
-- **Repeatable reads** — the client always sees the transfer on refresh (MySQL is source of truth)
+- **Repeatable reads** — the client always sees the transfer on refresh (MySQL is source of truth for the read model)
+- **Transfer-api independence** — transfer-api does not need to be running at the time the transfer is initiated. The outbox message sits in Kafka (`transfer-requests`) until transfer-api comes online and consumes it. Transfer-api supports initial validation (bank account ownership, transfer limits) when available, but the transfer is guaranteed to be created regardless.
 - **No custom publisher** — Debezium runs as a Kafka Connect connector (already in the stack)
 - **Low latency** — binlog tailing is near-real-time (~100ms)
 
