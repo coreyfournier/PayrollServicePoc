@@ -11,6 +11,7 @@ public class EventProcessor
     private readonly IEmployeeRecordRepository _repository;
     private readonly IEmployeePayAttributesRepository _payAttributesRepository;
     private readonly ITransferRecordRepository _transferRecordRepository;
+    private readonly IEmployeeTransferStatusRepository _transferStatusRepository;
     private readonly ISubscriptionPublisher _subscriptionPublisher;
     private readonly ILogger<EventProcessor> _logger;
 
@@ -18,12 +19,14 @@ public class EventProcessor
         IEmployeeRecordRepository repository,
         IEmployeePayAttributesRepository payAttributesRepository,
         ITransferRecordRepository transferRecordRepository,
+        IEmployeeTransferStatusRepository transferStatusRepository,
         ISubscriptionPublisher subscriptionPublisher,
         ILogger<EventProcessor> logger)
     {
         _repository = repository;
         _payAttributesRepository = payAttributesRepository;
         _transferRecordRepository = transferRecordRepository;
+        _transferStatusRepository = transferStatusRepository;
         _subscriptionPublisher = subscriptionPublisher;
         _logger = logger;
     }
@@ -261,6 +264,94 @@ public class EventProcessor
                 await _subscriptionPublisher.PublishPayAttributesChangeAsync(employee);
             }
         }
+
+        // Recompute transfer status
+        await RecomputeTransferStatusAsync(employeeId, payPeriodNumber);
+    }
+
+    public async Task ProcessTransferLimitsEventAsync(TransferLimitsPayload payload)
+    {
+        if (!Guid.TryParse(payload.EmployeeId, out var employeeId))
+        {
+            _logger.LogWarning("Invalid employeeId in transfer limits event: {EmployeeId}", payload.EmployeeId);
+            return;
+        }
+
+        _logger.LogInformation("Processing transfer limits event for employee {EmployeeId}", employeeId);
+
+        // Get the employee's current pay period from pay attributes
+        var payAttributes = await _payAttributesRepository.GetByEmployeeIdAsync(employeeId);
+        var payPeriodNumber = payAttributes?.PayPeriodNumber ?? 0;
+
+        // Get or create transfer status
+        var status = await _transferStatusRepository.GetByEmployeeIdAsync(employeeId)
+            ?? new Entities.EmployeeTransferStatus { EmployeeId = employeeId };
+
+        // Update limits from event
+        status.PeriodTransferLimit = payload.MaxPerPayPeriod;
+        status.PeriodAmountLimit = (decimal)payload.MaxAmountPerPayPeriod;
+        status.DailyTransferLimit = payload.MaxPerDay;
+        status.PayPeriodNumber = payPeriodNumber;
+        status.UpdatedAt = DateTime.UtcNow;
+
+        // Recompute usage and flags
+        await ComputeUsageAndFlagsAsync(status, employeeId, payPeriodNumber);
+
+        await _transferStatusRepository.UpsertAsync(status);
+        await _subscriptionPublisher.PublishTransferStatusChangeAsync(status);
+    }
+
+    private async Task RecomputeTransferStatusAsync(Guid employeeId, long payPeriodNumber)
+    {
+        var status = await _transferStatusRepository.GetByEmployeeIdAsync(employeeId)
+            ?? new Entities.EmployeeTransferStatus
+            {
+                EmployeeId = employeeId,
+                PeriodTransferLimit = 5,
+                PeriodAmountLimit = 10000m,
+                DailyTransferLimit = 1
+            };
+
+        status.PayPeriodNumber = payPeriodNumber;
+        status.UpdatedAt = DateTime.UtcNow;
+
+        await ComputeUsageAndFlagsAsync(status, employeeId, payPeriodNumber);
+
+        await _transferStatusRepository.UpsertAsync(status);
+        await _subscriptionPublisher.PublishTransferStatusChangeAsync(status);
+    }
+
+    private async Task ComputeUsageAndFlagsAsync(Entities.EmployeeTransferStatus status, Guid employeeId, long payPeriodNumber)
+    {
+        // Period usage
+        if (payPeriodNumber > 0)
+        {
+            var periodTransfers = await _transferRecordRepository.GetByEmployeeAndPayPeriodAsync(employeeId, payPeriodNumber);
+            var completed = periodTransfers.Where(t => t.Status == "Completed").ToList();
+            status.TransferCount = completed.Count;
+            status.TotalAmountTransferred = completed.Sum(t => t.Amount);
+        }
+        else
+        {
+            status.TransferCount = 0;
+            status.TotalAmountTransferred = 0;
+        }
+
+        // Daily usage
+        var todayStart = DateTime.UtcNow.Date;
+        var dailyCount = await _transferRecordRepository.GetCountByEmployeeAndDateAsync(employeeId, todayStart);
+        // Filter to completed only for daily count
+        var allTransfers = await _transferRecordRepository.GetByEmployeeIdAsync(employeeId);
+        status.DailyTransferCount = allTransfers.Count(t =>
+            t.Status == "Completed" && t.InitiatedAt.Date == todayStart);
+
+        // Compute flags
+        status.PeriodCountLimitReached = status.TransferCount >= status.PeriodTransferLimit;
+        status.PeriodAmountLimitReached = status.TotalAmountTransferred >= status.PeriodAmountLimit;
+        status.DailyLimitReached = status.DailyTransferCount >= status.DailyTransferLimit;
+        status.CanTransfer = !status.PeriodCountLimitReached
+            && !status.PeriodAmountLimitReached
+            && !status.DailyLimitReached;
     }
 }
 
@@ -432,4 +523,19 @@ public class WorkflowStepPayload
     public DateTime? CompletedAt { get; set; }
     public string? Detail { get; set; }
     public int RetryCount { get; set; }
+}
+
+public class TransferLimitsPayload
+{
+    [JsonPropertyName("EMPLOYEE_ID")]
+    public string EmployeeId { get; set; } = string.Empty;
+
+    [JsonPropertyName("MAX_PER_PAY_PERIOD")]
+    public int MaxPerPayPeriod { get; set; }
+
+    [JsonPropertyName("MAX_AMOUNT_PER_PAY_PERIOD")]
+    public double MaxAmountPerPayPeriod { get; set; }
+
+    [JsonPropertyName("MAX_PER_DAY")]
+    public int MaxPerDay { get; set; }
 }

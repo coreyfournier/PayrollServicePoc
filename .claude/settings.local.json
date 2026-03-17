@@ -20,7 +20,8 @@
       "Bash(docker run:*)",
       "Bash(sleep:*)",
       "Bash(docker stop:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(find:*)"
     ]
   }
 }

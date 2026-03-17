@@ -10,11 +10,15 @@ import {
   createDeduction, updateDeduction, deleteDeduction, updateTimeEntry,
   updateEmployee, getTransfers, getBankAccounts, createBankAccount,
   initiateTransfer, acceptTransferBalanceChange,
-  getEmployeeTransferLimits, setEmployeeTransferLimits, deleteEmployeeTransferLimits
+  getEmployeeTransferLimits, setEmployeeTransferLimits, deleteEmployeeTransferLimits,
+  getTransferLimits
 } from '../api';
 import { format, formatDistanceToNow } from 'date-fns';
 
 const PAY_TYPES = { 1: 'Hourly', 2: 'Salary' };
+const PAY_PERIOD_EPOCH_MS = new Date('2024-01-01T00:00:00Z').getTime();
+const PAY_PERIOD_DURATION_MS = 14 * 24 * 60 * 60 * 1000;
+const getCurrentPayPeriod = () => Math.floor((Date.now() - PAY_PERIOD_EPOCH_MS) / PAY_PERIOD_DURATION_MS);
 const DEDUCTION_TYPES = {
   1: 'Health Insurance',
   2: 'Dental Insurance',
@@ -59,6 +63,7 @@ function EmployeeDetail() {
   const [bankAccountForm, setBankAccountForm] = useState({ bankName: '', accountNumberMasked: '', routingNumber: '', accountType: 1 });
   const [showLimitsModal, setShowLimitsModal] = useState(false);
   const [customLimits, setCustomLimits] = useState(null);
+  const [transferLimitsData, setTransferLimitsData] = useState(null);
   const [limitsForm, setLimitsForm] = useState({
     maxTransfersPerPayPeriod: 5,
     maxAmountPerPayPeriod: 10000,
@@ -106,6 +111,15 @@ function EmployeeDetail() {
         setCustomLimits(limitsRes.data);
       } catch {
         setCustomLimits(null);
+      }
+
+      // Load transfer limits usage data
+      try {
+        const payPeriod = getCurrentPayPeriod();
+        const limitsDataRes = await getTransferLimits(id, payPeriod);
+        setTransferLimitsData(limitsDataRes.data);
+      } catch {
+        setTransferLimitsData(null);
       }
 
       // Check if currently clocked in
@@ -703,7 +717,11 @@ function EmployeeDetail() {
                 <button className="btn btn-secondary btn-sm" onClick={() => setShowBankAccountModal(true)}>
                   <Plus /> Add Bank Account
                 </button>
-                <button className="btn btn-primary btn-sm" onClick={handleOpenTransferModal}>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleOpenTransferModal}
+                  disabled={transferLimitsData && !transferLimitsData.canTransfer}
+                >
                   <Send /> New Transfer
                 </button>
               </div>
@@ -753,19 +771,19 @@ function EmployeeDetail() {
                   <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Per Day</div>
                     <div style={{ fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>
-                      {customLimits ? customLimits.maxTransfersPerDay : 1}
+                      {transferLimitsData ? `${transferLimitsData.transfersToday} of ` : ''}{customLimits ? customLimits.maxTransfersPerDay : 1}
                     </div>
                   </div>
                   <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Per Period</div>
                     <div style={{ fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>
-                      {customLimits ? customLimits.maxTransfersPerPayPeriod : 5}
+                      {transferLimitsData ? `${transferLimitsData.currentPeriodCount} of ` : ''}{customLimits ? customLimits.maxTransfersPerPayPeriod : 5}
                     </div>
                   </div>
                   <div style={{ background: '#f8fafc', borderRadius: '8px', padding: '12px' }}>
                     <div style={{ fontSize: '11px', color: '#94a3b8', textTransform: 'uppercase' }}>Max Amount / Period</div>
                     <div style={{ fontSize: '18px', fontWeight: '600', color: '#1e293b' }}>
-                      ${(customLimits ? customLimits.maxAmountPerPayPeriod : 10000).toLocaleString()}
+                      {transferLimitsData ? `$${(transferLimitsData.currentPeriodAmount ?? 0).toLocaleString()} of ` : ''}${(customLimits ? customLimits.maxAmountPerPayPeriod : 10000).toLocaleString()}
                     </div>
                   </div>
                 </div>
@@ -777,6 +795,11 @@ function EmployeeDetail() {
                 {!customLimits && (
                   <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '6px' }}>
                     Using global defaults
+                  </div>
+                )}
+                {transferLimitsData && !transferLimitsData.canTransfer && (
+                  <div style={{ fontSize: '12px', color: '#ef4444', marginTop: '6px', fontWeight: '500' }}>
+                    Transfer limit reached — {transferLimitsData.reasons?.join(' ')}
                   </div>
                 )}
               </div>

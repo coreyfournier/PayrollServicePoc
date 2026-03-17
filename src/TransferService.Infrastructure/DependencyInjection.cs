@@ -25,6 +25,7 @@ public static class DependencyInjection
         services.AddScoped<IBankTransferService, SimulatedBankService>();
         services.AddScoped<ITransferValidationService, TransferValidationService>();
         services.AddScoped<ITransferEventPublisher, TransferEventPublisher>();
+        services.AddScoped<ILimitsEventPublisher, LimitsEventPublisher>();
 
         services.AddHttpClient<IBalanceService, KsqlDbBalanceService>(client =>
         {

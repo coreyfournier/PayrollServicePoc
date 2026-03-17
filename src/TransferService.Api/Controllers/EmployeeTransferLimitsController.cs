@@ -1,7 +1,9 @@
+using MassTransit;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using TransferService.Application.Commands.TransferLimits;
 using TransferService.Application.DTOs;
+using TransferService.Application.Messages;
 using TransferService.Application.Queries.TransferLimits;
 
 namespace TransferService.Api.Controllers;
@@ -11,10 +13,12 @@ namespace TransferService.Api.Controllers;
 public class EmployeeTransferLimitsController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly IPublishEndpoint _publishEndpoint;
 
-    public EmployeeTransferLimitsController(IMediator mediator)
+    public EmployeeTransferLimitsController(IMediator mediator, IPublishEndpoint publishEndpoint)
     {
         _mediator = mediator;
+        _publishEndpoint = publishEndpoint;
     }
 
     [HttpGet]
@@ -34,6 +38,7 @@ public class EmployeeTransferLimitsController : ControllerBase
             dto.MaxTransfersPerPayPeriod,
             dto.MaxAmountPerPayPeriod,
             dto.MaxTransfersPerDay));
+        await _publishEndpoint.Publish(new EmployeeLimitsUpdated(employeeId));
         return Ok(result);
     }
 
@@ -41,6 +46,7 @@ public class EmployeeTransferLimitsController : ControllerBase
     public async Task<ActionResult> Delete(Guid employeeId)
     {
         await _mediator.Send(new DeleteEmployeeTransferLimitsCommand(employeeId));
+        await _publishEndpoint.Publish(new EmployeeLimitsUpdated(employeeId));
         return NoContent();
     }
 }

@@ -36,6 +36,7 @@ builder.Services.AddScoped<IEmployeeRecordRepository, EmployeeRecordRepository>(
 builder.Services.AddScoped<IEmployeePayAttributesRepository, EmployeePayAttributesRepository>();
 builder.Services.AddScoped<EventProcessor>();
 builder.Services.AddScoped<ITransferRecordRepository, TransferRecordRepository>();
+builder.Services.AddScoped<IEmployeeTransferStatusRepository, EmployeeTransferStatusRepository>();
 builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher>();
 
 builder.Services.AddHttpClient("TransferService", client =>
@@ -59,6 +60,7 @@ builder.Services.AddMassTransit(x =>
         rider.AddConsumer<EmployeeEventConsumer>();
         rider.AddConsumer<TransferEventConsumer>();
         rider.AddConsumer<NetPayEventConsumer>();
+        rider.AddConsumer<TransferLimitsConsumer>();
 
         rider.UsingKafka((context, k) =>
         {
@@ -90,6 +92,15 @@ builder.Services.AddMassTransit(x =>
                     (msg, val) => msg.Value = val));
                 e.ConfigureConsumer<NetPayEventConsumer>(context);
             });
+
+            // transfer-limits: JSON from transfer-api (limits per employee)
+            k.TopicEndpoint<Ignore, TransferLimitsMessage>("transfer-limits", "listener-api-group", e =>
+            {
+                e.AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest;
+                e.SetValueDeserializer(new RawStringDeserializer<TransferLimitsMessage>(
+                    (msg, val) => msg.Value = val));
+                e.ConfigureConsumer<TransferLimitsConsumer>(context);
+            });
         });
     });
 });
@@ -102,6 +113,7 @@ builder.Services
     .AddMutationType<EmployeeMutation>()
     .AddSubscriptionType<EmployeeSubscription>()
     .AddTypeExtension<TransferSubscription>()
+    .AddTypeExtension<TransferStatusSubscription>()
     .AddInMemorySubscriptions()
     .AddFiltering()
     .AddSorting();

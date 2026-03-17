@@ -226,16 +226,18 @@ public class TransferController : ControllerBase
         var inProgressStatuses = new[] { "Initiated", "Processing", "AwaitingConfirmation", "Queued", "AcceptPending" };
 
         var periodTransfers = await _transferRepository.GetByEmployeeAndPayPeriodAsync(employeeId, payPeriodNumber);
-        var currentCount = periodTransfers.Count;
-        var currentAmount = periodTransfers.Sum(t => t.Amount);
+        var completedTransfers = periodTransfers.Where(t => t.Status == "Completed").ToList();
+        var currentCount = completedTransfers.Count;
+        var currentAmount = completedTransfers.Sum(t => t.Amount);
 
         var todayStart = DateTime.UtcNow.Date;
-        var transfersToday = await _transferRepository.GetCountByEmployeeAndDateAsync(employeeId, todayStart);
+        var allTransfers = await _transferRepository.GetByEmployeeIdAsync(employeeId);
+        var transfersToday = allTransfers.Count(t =>
+            t.Status == "Completed" && t.InitiatedAt.Date == todayStart);
 
         var reasons = new List<string>();
 
         // Best-effort in-progress check (MySQL may lag behind MongoDB)
-        var allTransfers = await _transferRepository.GetByEmployeeIdAsync(employeeId);
         var hasInProgress = allTransfers.Any(t => inProgressStatuses.Contains(t.Status));
         if (hasInProgress)
             reasons.Add("A transfer is already in progress for this employee.");
@@ -250,7 +252,7 @@ public class TransferController : ControllerBase
         return new TransferLimitsResponse(
             maxPerPayPeriod, maxAmountPerPayPeriod, maxPerDay,
             currentCount, currentAmount, transfersToday,
-            reasons.Count == 0, reasons);
+            reasons.Count == 0, reasons, currentAmount);
     }
 }
 
@@ -265,7 +267,8 @@ public record TransferLimitsResponse(
     decimal CurrentPeriodAmount,
     int TransfersToday,
     bool CanTransfer,
-    List<string> Reasons);
+    List<string> Reasons,
+    decimal TotalAmountTransferred);
 
 record ValidationResponse(bool Responded, bool CanTransfer, List<string> Reasons);
 record ValidationResponseBody(bool CanTransfer, List<string>? Reasons);

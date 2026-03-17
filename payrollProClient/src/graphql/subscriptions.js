@@ -68,3 +68,25 @@ export const TRANSFER_CHANGE_SUBSCRIPTION = `
     }
   }
 `;
+
+export const TRANSFER_STATUS_SUBSCRIPTION = `
+  subscription OnTransferStatusChanged {
+    onTransferStatusChanged {
+      transferStatus {
+        employeeId
+        canTransfer
+        periodCountLimitReached
+        periodAmountLimitReached
+        dailyLimitReached
+        transferCount
+        totalAmountTransferred
+        dailyTransferCount
+        periodTransferLimit
+        periodAmountLimit
+        dailyTransferLimit
+        payPeriodNumber
+      }
+      timestamp
+    }
+  }
+`;

@@ -197,6 +197,7 @@ kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-requests
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-events
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-limits --config cleanup.policy=compact
 
 # Purge non-compacted topics via kafka-delete-records (3 partitions each)
 PURGE_TOPICS="employee-events timeentry-events taxinfo-events deduction-events transfer-requests transfer-events"
@@ -217,14 +218,16 @@ log "  Purged non-compacted topics"
 kafka-topics --delete --topic employee-net-pay --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 kafka-topics --delete --topic employee-search --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 kafka-topics --delete --topic employee-info --bootstrap-server $BOOTSTRAP 2>/dev/null || true
+kafka-topics --delete --topic transfer-limits --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 sleep 2
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
-log "  Recreated compacted topics (employee-net-pay, employee-search, employee-info)"
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-limits --config cleanup.policy=compact
+log "  Recreated compacted topics (employee-net-pay, employee-search, employee-info, transfer-limits)"
 
 # Fix partition count for any topics that were auto-created with 1 partition by consumers
-ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events employee-net-pay employee-search employee-info transfer-requests transfer-events"
+ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events employee-net-pay employee-search employee-info transfer-requests transfer-events transfer-limits"
 for topic in $ALL_TOPICS; do
   kafka-topics --alter --topic $topic --partitions 3 --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 done
@@ -527,6 +530,16 @@ BA5=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 }")
 BA5_ID=$(echo "$BA5" | jq -r '.id')
 log "  David Davis — Chase Bank ****7890 — $BA5_ID"
+
+# ── Publish default transfer limits for each employee ────────────────────
+
+log "Publishing default transfer limits..."
+for EMP_ID in $EMP1_ID $EMP2_ID $EMP3_ID $EMP4_ID $EMP5_ID; do
+  echo "${EMP_ID}:{\"EMPLOYEE_ID\":\"${EMP_ID}\",\"MAX_PER_PAY_PERIOD\":5,\"MAX_AMOUNT_PER_PAY_PERIOD\":10000.0,\"MAX_PER_DAY\":1}" | \
+    kafka-console-producer --bootstrap-server $BOOTSTRAP --topic transfer-limits \
+      --property "parse.key=true" --property "key.separator=:" 2>/dev/null
+done
+log "  Published default limits for 5 employees"
 
 # ── Time entries (hourly employees only) ─────────────────────────────────
 

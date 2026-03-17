@@ -63,6 +63,20 @@ function PayDetailModal({ employee, onClose, onTransfer }) {
 
           <div className="pay-detail-label pay-detail-net-label">Net Pay</div>
           <div className="pay-detail-value pay-detail-net">{formatCurrency(pa.netPay)}</div>
+
+          {Number(pa.transferTotalAmount || 0) > 0 && (
+            <>
+              <div className="pay-detail-separator" />
+
+              <div className="pay-detail-label">Transfers (Period {pa.payPeriodNumber})</div>
+              <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(pa.transferTotalAmount)}</div>
+            </>
+          )}
+
+          <div className="pay-detail-separator" />
+
+          <div className="pay-detail-label pay-detail-net-label">Available Balance</div>
+          <div className="pay-detail-value pay-detail-net">{formatCurrency(Number(pa.netPay) - Number(pa.transferTotalAmount || 0))}</div>
         </div>
         <div className="pay-detail-actions">
           <button className="btn btn-primary" onClick={onTransfer}>
@@ -322,7 +336,7 @@ export default function EmployeeList() {
                   <th>Email</th>
                   <th>Pay Type</th>
                   <th>Pay Rate</th>
-                  <th>Net Pay</th>
+                  <th>Available Balance</th>
                   <th>Transfers</th>
                   <th>Status</th>
                   <th>Last Event</th>
@@ -351,7 +365,7 @@ export default function EmployeeList() {
                       onClick={() => employee.payAttributes && setSelectedEmployeeId(employee.id)}
                     >
                       {employee.payAttributes
-                        ? `$${Number(employee.payAttributes.netPay).toFixed(2)}`
+                        ? `$${(Number(employee.payAttributes.netPay) - Number(employee.payAttributes.transferTotalAmount || 0)).toFixed(2)}`
                         : '\u2014'}
                     </td>
                     <td className="transfer-indicator-cell">

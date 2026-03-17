@@ -55,10 +55,10 @@ public class TransferValidationService : ITransferValidationService
         // Transfer limits validation
         var periodTransfers = await _transferRepository.GetByEmployeeAndPayPeriodAsync(
             request.EmployeeId, request.PayPeriodNumber, cancellationToken);
-        var activeTransfers = periodTransfers.Where(t => t.Status != TransferStatus.Failed).ToList();
+        var completedTransfers = periodTransfers.Where(t => t.Status == TransferStatus.Completed).ToList();
 
-        var currentCount = activeTransfers.Count;
-        var currentAmount = activeTransfers.Sum(t => t.Amount);
+        var currentCount = completedTransfers.Count;
+        var currentAmount = completedTransfers.Sum(t => t.Amount);
 
         var transfersToday = await _transferRepository.GetCountByEmployeeAndDateAsync(
             request.EmployeeId, DateTime.UtcNow.Date, cancellationToken);

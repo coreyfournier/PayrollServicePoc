@@ -81,4 +81,25 @@ public class InMemorySubscriptionPublisher : ISubscriptionPublisher
             throw;
         }
     }
+
+    public async Task PublishTransferStatusChangeAsync(EmployeeTransferStatus status)
+    {
+        try
+        {
+            var change = new TransferStatusChange
+            {
+                TransferStatus = status,
+                Timestamp = DateTime.UtcNow
+            };
+
+            await _eventSender.SendAsync("TransferStatusChanges", change);
+            _logger.LogInformation("Published transfer status change for employee {EmployeeId}, canTransfer={CanTransfer}",
+                status.EmployeeId, status.CanTransfer);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to publish transfer status change for employee {EmployeeId}", status.EmployeeId);
+            throw;
+        }
+    }
 }

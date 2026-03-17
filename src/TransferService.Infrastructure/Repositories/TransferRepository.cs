@@ -40,7 +40,9 @@ public class TransferRepository : ITransferRepository
     {
         var nextDay = date.AddDays(1);
         return (int)await _dbContext.Transfers
-            .CountDocumentsAsync(t => t.EmployeeId == employeeId && t.InitiatedAt >= date && t.InitiatedAt < nextDay, cancellationToken: cancellationToken);
+            .CountDocumentsAsync(t => t.EmployeeId == employeeId
+                && t.Status == TransferStatus.Completed
+                && t.InitiatedAt >= date && t.InitiatedAt < nextDay, cancellationToken: cancellationToken);
     }
 
     public async Task<IEnumerable<Transfer>> GetRecentAsync(int limit = 50, string? statusFilter = null, CancellationToken cancellationToken = default)
