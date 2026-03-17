@@ -45,7 +45,7 @@ The `kafka-init` and `ksqldb-init` services are available standalone under the `
 ### Running tests
 ```bash
 dotnet test tests/PayrollService.UnitTests/        # 32 payroll domain/application tests
-dotnet test tests/TransferService.UnitTests/        # 18 transfer domain tests
+dotnet test tests/TransferService.UnitTests/        # 27 transfer domain tests
 cd frontend && npm test                             # 63 frontend component/hook tests
 cd frontend && npm run lint                         # ESLint — CI runs this too, must pass
 ```
@@ -79,8 +79,8 @@ Separate bounded context for bank transfers, extracted from PayrollService. Has 
 
 - **Domain**: Entities (`Transfer`, `BankAccount`), value objects (`TransferLimits`), domain events, repository interfaces.
 - **Application**: MediatR CQRS — transfer initiation, bank account CRUD, transfer limits queries.
-- **Infrastructure**: Separate `TransferMongoDbContext`, MassTransit outbox publishing to `transfer-events` topic, ksqlDB balance service, simulated bank service.
-- **Api**: ASP.NET Core controllers, MassTransit saga state machine for transfer orchestration. Runs on port 5002.
+- **Infrastructure**: Separate `TransferMongoDbContext`, `TransferEventPublisher` (Kafka, used by bridge consumer), ksqlDB balance service, simulated bank service.
+- **Api**: ASP.NET Core controllers, MassTransit saga state machine (RabbitMQ orchestration), Kafka bridge consumer, workflow step consumers. Runs on port 5002.
 
 The frontend nginx config routes `/api/transfers/` and `/api/bankaccounts/` to `transfer-api`, all other `/api/` requests to `payroll-api`.
 
@@ -286,61 +286,124 @@ Key files: `src/ListenerApi.Data/Entities/OutboxMessage.cs`, `src/ListenerApi/Co
 See `docs/transfer-outbox-options.md` for the full comparison of approaches evaluated and outbox cleanup details.
 
 **Messages** (defined in `src/TransferService.Application/Messages/TransferMessages.cs`):
+
+Inbound:
 - `TransferRequested` — published when a transfer is initiated (via outbox or direct API)
 - `BalanceAccepted` — published when a user accepts/rejects an insufficient balance
+
+Scheduled (RabbitMQ delayed delivery):
 - `ConfirmationTimedOut` — scheduled by the saga, fires after 24h if balance not confirmed
 - `RetryBankTransfer` — scheduled by the saga for exponential backoff retries (2s, 4s, 8s)
+
+Workflow commands (saga → step consumers via RabbitMQ):
+- `RunBalanceCheck` — saga dispatches after validation passes
+- `RunFraudCheck` — saga dispatches after balance check passes
+- `RunBankTransfer` — saga dispatches after fraud check passes
+
+Workflow step completion events (step consumers → saga via RabbitMQ):
+- `BalanceCheckCompleted` — includes `Sufficient` flag and `CurrentBalance`
+- `FraudCheckCompleted` — always passes (simulated)
+- `BankTransferCompleted` — includes `Success`, `ExternalReferenceId`, `ErrorMessage`
+
+Kafka bridge event:
+- `TransferUpdated` — lightweight event published to RabbitMQ by the saga after each state change; `TransferKafkaBridgeConsumer` picks it up, loads the Transfer from MongoDB, and publishes the full entity to Kafka `transfer-events`
+
+**Messaging Topology (RabbitMQ + Kafka Bridge):**
+
+The saga uses **RabbitMQ** for all internal orchestration (commands, step completions, scheduled messages). Kafka is used only for external event distribution to ListenerApi. This avoids the dual-write problem — the saga only writes to MongoDB and publishes to RabbitMQ. A dedicated bridge consumer forwards state changes to Kafka.
+
+```
+RabbitMQ (saga orchestration):
+  TransferStateMachine ──publish──► RunBalanceCheck ──► RunBalanceCheckConsumer
+                        ◄─publish── BalanceCheckCompleted ◄────────────────────┘
+                        ──publish──► RunFraudCheck ──► RunFraudCheckConsumer
+                        ◄─publish── FraudCheckCompleted ◄──────────────────┘
+                        ──publish──► RunBankTransfer ──► RunBankTransferConsumer
+                        ◄─publish── BankTransferCompleted ◄────────────────────┘
+
+Kafka bridge (RabbitMQ → Kafka):
+  TransferStateMachine ──publish──► TransferUpdated ──► TransferKafkaBridgeConsumer
+                                                              │
+                                                    Load Transfer from MongoDB
+                                                              │
+                                                    Publish to Kafka (transfer-events)
+                                                              │
+                                                              ▼
+                                                    ListenerApi (Kafka Rider consumer)
+                                                              │
+                                                              ▼
+                                                    MySQL listener_db.TransferRecords
+                                                              │
+                                                              ▼
+                                                    GraphQL subscription → PayrollPro Client
+```
 
 **End-to-End Data Flow:**
 ```
 Client (REST/GraphQL)
   │
   ├─► Direct: POST transfer-api:5002/api/Transfers
-  │     └─► Publishes TransferRequested → TransferStateMachine (saga keyed by transferId)
-  │           ├─ Validate bank account ownership
-  │           ├─ Check transfer limits (daily/period count/amount)
-  │           ├─ Create Transfer entity → MassTransitUnitOfWork
-  │           │    ├─ MongoDB transfer_db write
-  │           │    └─ Kafka publish (transfer-events)
-  │           └─ Saga transitions through states
+  │     └─► Publishes TransferRequested (RabbitMQ) → TransferStateMachine
   │
   └─► Async: ListenerApi (Debezium Outbox) → Kafka (transfer-requests)
-        └─► TransferRequestConsumer publishes TransferRequested → same saga path
+        └─► TransferRequestConsumer publishes TransferRequested (RabbitMQ) → same saga path
 
 TransferStateMachine (src/TransferService.Api/Sagas/TransferStateMachine.cs):
-  States: Submitted → BalanceVerified | AwaitingConfirmation → Processing → Completed | Failed
+  States: Initial → CheckingBalance | Failed → AwaitingConfirmation | CheckingFraud → Transferring → Completed | Failed
 
-  1. TransferRequested → Submitted — validate, query ksqlDB for employee net pay
-  │   ├─ Balance sufficient → BalanceVerified
+  1. TransferRequested → Initial
+  │   ├─ Create Transfer entity in MongoDB (all 5 workflow steps: Validation=InProgress, rest=Pending)
+  │   ├─ Publish TransferUpdated → Kafka bridge (first event: transfer visible with Validation in progress)
+  │   ├─ Simulated validation delay (1-3s)
+  │   ├─ Run validation (bank account ownership, transfer limits, duplicate check)
+  │   ├─ Publish TransferUpdated → Kafka bridge (second event: Validation result, BalanceCheck=InProgress)
+  │   └─ Dispatch RunBalanceCheck → RunBalanceCheckConsumer (RabbitMQ)
+  │
+  2. BalanceCheckCompleted → CheckingBalance
+  │   ├─ Balance sufficient → CheckingFraud
+  │   │   └─ Dispatch RunFraudCheck → RunFraudCheckConsumer (RabbitMQ)
   │   └─ Balance insufficient → AwaitingConfirmation
   │       └─ Schedule ConfirmationTimedOut (24h) via MassTransit Schedule<>
-  │           ├─ BalanceAccepted (accepted=true) → BalanceVerified
+  │           ├─ BalanceAccepted (accepted=true) → CheckingFraud
   │           └─ BalanceAccepted (accepted=false) / ConfirmationTimedOut → Failed
-  2. BalanceVerified → Processing — call SimulatedBankService
-  │   └─ On failure: schedule RetryBankTransfer (up to 3x, exponential backoff)
-  3. Processing → Completed or Failed
   │
-  Each state change → MassTransitUnitOfWork → Kafka (transfer-events)
-                                                    │
-                                                    ▼
-                                          ListenerApi (MassTransit Kafka Rider consumer)
-                                                    │
-                                                    ▼
-                                          MySQL listener_db.TransferRecords
-                                                    │
-                                                    ▼
-                                          GraphQL subscription → PayrollPro Client
+  3. FraudCheckCompleted → Transferring
+  │   └─ Dispatch RunBankTransfer → RunBankTransferConsumer (RabbitMQ)
+  │
+  4. BankTransferCompleted → Completed or retry (up to 3x, exponential backoff) or Failed
+  │
+  Each state change:
+    1. Update Transfer entity in MongoDB (workflow steps + status)
+    2. Publish TransferUpdated to RabbitMQ
+    3. TransferKafkaBridgeConsumer loads Transfer from MongoDB → publishes to Kafka (transfer-events)
+    4. ListenerApi consumes from Kafka → materializes to MySQL → GraphQL subscription
 ```
 
+**Workflow Steps:**
+
+All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka event contains the full progress picture. Steps transition through `Pending → InProgress → Completed/Failed`. The conditional `AwaitingConfirmation` step is added dynamically only when balance is insufficient.
+
+| Step | Simulated Delay | Notes |
+|------|----------------|-------|
+| Validation | 1-3s random | Inline in saga, checks bank account + transfer limits |
+| BalanceCheck | 1-5s random | RunBalanceCheckConsumer queries ksqlDB for employee net pay |
+| FraudCheck | 4s fixed | RunFraudCheckConsumer (always passes) |
+| BankTransfer | 1-10s random | RunBankTransferConsumer calls SimulatedBankService (~20% failure) |
+| Complete | — | Final step, marked when bank transfer succeeds |
+
 **Two Databases:**
-- **transfer_db** (MongoDB) — authoritative transfer and bank account data. Collections: `transfers`, `bank_accounts`.
+- **transfer_db** (MongoDB) — authoritative transfer and bank account data. Collections: `transfers`, `bank_accounts`, `transfer_sagas`.
 - **listener_db.TransferRecords** (MySQL) — read model materialized from Kafka `transfer-events` topic via ListenerApi. Used for client queries and GraphQL subscriptions.
 
-**MassTransit Saga State Machine for Concurrency Control:**
-- `TransferStateMachine` orchestrates the full transfer lifecycle. Concurrency is handled by MongoDB saga document-level locking — concurrent messages for the same saga instance are serialized at the database level.
-- The saga checks transfer limits (per pay period count, per period amount, per day count), creates the Transfer entity, and transitions through states.
-- The 24h confirmation timeout uses MassTransit's `Schedule<>` instead of external timer infrastructure.
-- Bank transfer retries use scheduled messages with exponential backoff.
+**MassTransit Saga State Machine:**
+- `TransferStateMachine` orchestrates the full transfer lifecycle using **RabbitMQ** for all inter-service messaging.
+- Saga state persisted to MongoDB (`transfer_sagas` collection) with document-level locking for concurrency control.
+- Step consumers (`RunBalanceCheckConsumer`, `RunFraudCheckConsumer`, `RunBankTransferConsumer`) run as MassTransit consumers on RabbitMQ queues within the same transfer-api process.
+- The saga only writes to MongoDB and publishes to RabbitMQ — never directly to Kafka. The `TransferKafkaBridgeConsumer` bridges state changes to Kafka with proper retry semantics via MassTransit's consumer pipeline.
+- The 24h confirmation timeout uses MassTransit's `Schedule<>` with RabbitMQ delayed delivery.
+- Bank transfer retries use scheduled messages with exponential backoff (2s, 4s, 8s).
+
+**One In-Progress Transfer Per Employee** — the `HasInProgressTransferAsync` check in `TransferValidationService` excludes the current transfer ID (since the Transfer entity is created before validation runs) to avoid false positives.
 
 **Transfer Limits:**
 - Configurable via environment variables: `TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`.
@@ -350,26 +413,31 @@ TransferStateMachine (src/TransferService.Api/Sagas/TransferStateMachine.cs):
 **Simulated Bank Service:**
 - `SimulatedBankService` adds random delays (1-10s) and ~20% failure rate to test the retry logic.
 
-**MassTransit Kafka Rider Configuration:**
-- Kafka producer/consumer configuration is done in `Program.cs` for each service via MassTransit's Kafka Rider.
-- Transfer-api uses a separate consumer group (`transfer-service-group`) from payroll-api.
+**MassTransit Transport Configuration:**
+- **RabbitMQ** (`UsingRabbitMq`) — saga orchestration, step consumer commands/completions, scheduled messages, Kafka bridge consumer
+- **Kafka Rider** — inbound `transfer-requests` topic (Debezium outbox commands from ListenerApi), consumed by `TransferRequestConsumer`
+- **Confluent.Kafka producer** — used by `TransferEventPublisher` (called from `TransferKafkaBridgeConsumer`) to publish to `transfer-events` topic in CloudEvent format
 
 **Docker Services:**
-- `transfer-api` (port 5002) — TransferService.Api container, depends on MongoDB and Kafka.
+- `transfer-api` (port 5002) — TransferService.Api container, depends on MongoDB, Kafka, and RabbitMQ.
+- `rabbitmq` — MassTransit message broker for saga orchestration.
 
 **Key Files:**
-- `src/TransferService.Application/Messages/TransferMessages.cs` — all transfer events: `TransferRequested`, `BalanceAccepted`, `ConfirmationTimedOut`, `RetryBankTransfer`
-- `src/TransferService.Api/Sagas/TransferStateMachine.cs` — MassTransit saga state machine for transfer orchestration
-- `src/TransferService.Api/Sagas/TransferState.cs` — saga state entity
-- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — consumes transfer-requests from Kafka, publishes `TransferRequested` / `BalanceAccepted`
-- `src/TransferService.Infrastructure/ExternalServices/SimulatedBankService.cs` — simulated bank
+- `src/TransferService.Application/Messages/TransferMessages.cs` — all message types: inbound, scheduled, workflow commands, step completions, bridge event
+- `src/TransferService.Api/Sagas/TransferStateMachine.cs` — MassTransit saga state machine (RabbitMQ orchestration)
+- `src/TransferService.Api/Sagas/TransferState.cs` — saga state entity (MongoDB)
+- `src/TransferService.Api/Consumers/TransferKafkaBridgeConsumer.cs` — RabbitMQ consumer that bridges TransferUpdated events to Kafka
+- `src/TransferService.Api/Consumers/WorkflowStepConsumers.cs` — RunBalanceCheck, RunFraudCheck, RunBankTransfer consumers (RabbitMQ)
+- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — consumes transfer-requests from Kafka, publishes TransferRequested / BalanceAccepted to RabbitMQ
+- `src/TransferService.Infrastructure/Messaging/TransferEventPublisher.cs` — publishes Transfer entity to Kafka `transfer-events` (CloudEvent format)
+- `src/TransferService.Infrastructure/ExternalServices/SimulatedBankService.cs` — simulated bank with delays and failures
 - `src/TransferService.Infrastructure/ExternalServices/KsqlDbBalanceService.cs` — ksqlDB balance queries
 - `src/ListenerApi/Controllers/TransferController.cs` — async transfer initiation via Debezium outbox + queries
 
 ### Kafka Topics (Transfers)
 
-- `transfer-requests` — async commands from ListenerApi to transfer-api
-- `transfer-events` — transfer state changes from transfer-api to ListenerApi (via MassTransit outbox)
+- `transfer-requests` — async transfer commands from ListenerApi to transfer-api (via Debezium outbox)
+- `transfer-events` — transfer state changes from transfer-api to ListenerApi (via RabbitMQ bridge consumer)
 
 ### Key Files
 
@@ -386,12 +454,14 @@ TransferStateMachine (src/TransferService.Api/Sagas/TransferStateMachine.cs):
 - `src/NetPayProcessor/` — Kafka Streams Java app for net pay calculation
 - `src/ElasticsearchUpdater/` — Kafka consumer Java app combining employee info + net pay for Elasticsearch
 - `docker/Dockerfile.kafka-connect` — Kafka Connect image with Elasticsearch connector
-- `src/TransferService.Api/Program.cs` — TransferService DI, MassTransit saga registration
-- `src/TransferService.Application/Messages/TransferMessages.cs` — `TransferRequested`, `BalanceAccepted`, `ConfirmationTimedOut`, `RetryBankTransfer`
+- `src/TransferService.Api/Program.cs` — TransferService DI, MassTransit saga + RabbitMQ + Kafka Rider registration
+- `src/TransferService.Application/Messages/TransferMessages.cs` — all transfer message types
 - `src/TransferService.Api/Sagas/TransferStateMachine.cs` — MassTransit saga for transfer orchestration
 - `src/TransferService.Api/Sagas/TransferState.cs` — saga state entity
-- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — consumes from Kafka, publishes `TransferRequested` / `BalanceAccepted`
-- `src/TransferService.Domain/Entities/Transfer.cs` — transfer domain entity
+- `src/TransferService.Api/Consumers/TransferKafkaBridgeConsumer.cs` — RabbitMQ → Kafka bridge for transfer events
+- `src/TransferService.Api/Consumers/WorkflowStepConsumers.cs` — balance check, fraud check, bank transfer consumers
+- `src/TransferService.Api/Consumers/TransferRequestConsumer.cs` — consumes from Kafka, publishes to RabbitMQ
+- `src/TransferService.Domain/Entities/Transfer.cs` — transfer domain entity with workflow steps
 - `src/TransferService.Domain/Entities/BankAccount.cs` — bank account domain entity
 - `src/TransferService.Infrastructure/DependencyInjection.cs` — transfer infrastructure registration
 - `docker/Dockerfile.transferapi` — TransferService.Api Dockerfile
