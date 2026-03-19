@@ -21,7 +21,9 @@
       "Bash(sleep:*)",
       "Bash(docker stop:*)",
       "Bash(cd:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(dotnet ef:*)",
+      "Bash(dotnet test:*)"
     ]
   }
 }

@@ -82,7 +82,7 @@ Separate bounded context for bank transfers, extracted from PayrollService. Has 
 - **Infrastructure**: Separate `TransferMongoDbContext`, `TransferEventPublisher` (Kafka, used by bridge consumer), ksqlDB balance service, simulated bank service.
 - **Api**: ASP.NET Core controllers, MassTransit saga state machine (RabbitMQ orchestration), Kafka bridge consumer, workflow step consumers. Runs on port 5002.
 
-The frontend nginx config routes `/api/transfers/` and `/api/bankaccounts/` to `transfer-api`, all other `/api/` requests to `payroll-api`.
+The frontend nginx config routes `/api/transfers/` to `transfer-api`, `/api/bankaccounts/` to `listener-api`, and all other `/api/` requests to `payroll-api`.
 
 ### Write Path (MassTransitUnitOfWork)
 
@@ -105,13 +105,14 @@ Consumers parse CloudEvent JSON envelopes for backward compatibility with the ks
 **Entities:**
 - `EmployeeRecord` — employee data from `employee-events` topic
 - `EmployeePayAttributes` — 1:1 with `EmployeeRecord`, stores latest pay period net pay breakdown from `employee-net-pay` topic. PK = `EmployeeId` (FK to `EmployeeRecord`, cascade delete). Exposed via GraphQL as `payAttributes` nested field on employees.
+- `BankAccount` — employee bank accounts for transfers. CRUD via REST (`/api/bankaccounts`). Owned by ListenerApi; transfer-api accepts `BankAccountId` as an opaque reference without validating ownership.
 
 ### Service Ports (Docker)
 
 | Service | Port | Notes |
 |---------|------|-------|
 | payroll-api | 5000 | Swagger at /swagger |
-| transfer-api | 5002 | Swagger at /swagger, transfers & bank accounts |
+| transfer-api | 5002 | Swagger at /swagger, transfers only |
 | listener-api | 5001 | GraphQL at /graphql |
 | frontend | 3000 | REST client |
 | payrollpro-client | 3001 | GraphQL client |
@@ -395,15 +396,15 @@ All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka e
 
 | Step | Simulated Delay | Notes |
 |------|----------------|-------|
-| Validation | 1-3s random | Inline in saga, checks bank account + transfer limits |
+| Validation | 1-3s random | Inline in saga, checks transfer limits (bank account validated by ListenerApi before outbox) |
 | BalanceCheck | 1-5s random | RunBalanceCheckConsumer queries ksqlDB for employee net pay |
 | FraudCheck | 4s fixed | RunFraudCheckConsumer (always passes) |
 | BankTransfer | 1-10s random | RunBankTransferConsumer calls SimulatedBankService (~20% failure) |
 | Complete | — | Final step, marked when bank transfer succeeds |
 
 **Two Databases:**
-- **transfer_db** (MongoDB) — authoritative transfer and bank account data. Collections: `transfers`, `bank_accounts`, `transfer_sagas`.
-- **listener_db.TransferRecords** (MySQL) — read model materialized from Kafka `transfer-events` topic via ListenerApi. Used for client queries and GraphQL subscriptions.
+- **transfer_db** (MongoDB) — authoritative transfer data. Collections: `transfers`, `transfer_sagas`.
+- **listener_db** (MySQL) — read model materialized from Kafka topics via ListenerApi. Also owns bank accounts (`BankAccounts` table) and transfer status. Used for client queries and GraphQL subscriptions.
 
 **MassTransit Saga State Machine:**
 - `TransferStateMachine` orchestrates the full transfer lifecycle using **RabbitMQ** for all inter-service messaging.

@@ -12,6 +12,7 @@ public class TransferController : ControllerBase
 {
     private readonly ITransferRecordRepository _transferRepository;
     private readonly IEmployeeRecordRepository _employeeRepository;
+    private readonly IBankAccountRepository _bankAccountRepository;
     private readonly ListenerDbContext _dbContext;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<TransferController> _logger;
@@ -22,12 +23,14 @@ public class TransferController : ControllerBase
     public TransferController(
         ITransferRecordRepository transferRepository,
         IEmployeeRecordRepository employeeRepository,
+        IBankAccountRepository bankAccountRepository,
         ListenerDbContext dbContext,
         IHttpClientFactory httpClientFactory,
         ILogger<TransferController> logger)
     {
         _transferRepository = transferRepository;
         _employeeRepository = employeeRepository;
+        _bankAccountRepository = bankAccountRepository;
         _dbContext = dbContext;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
@@ -47,6 +50,13 @@ public class TransferController : ControllerBase
         var employee = await _employeeRepository.GetByIdAsync(request.EmployeeId);
         if (employee == null)
             return NotFound("Employee not found.");
+
+        // Validate bank account locally (bank accounts are owned by ListenerApi)
+        var bankAccount = await _bankAccountRepository.GetByIdAsync(request.BankAccountId);
+        if (bankAccount == null || !bankAccount.IsActive)
+            return BadRequest("Bank account not found or inactive.");
+        if (bankAccount.EmployeeId != request.EmployeeId)
+            return BadRequest("Bank account does not belong to this employee.");
 
         // Attempt authoritative validation from TransferService (single source of truth for rules).
         // If TransferService is down or slow, fall through to the outbox path — the actor will

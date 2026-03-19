@@ -37,6 +37,7 @@ builder.Services.AddScoped<IEmployeePayAttributesRepository, EmployeePayAttribut
 builder.Services.AddScoped<EventProcessor>();
 builder.Services.AddScoped<ITransferRecordRepository, TransferRecordRepository>();
 builder.Services.AddScoped<IEmployeeTransferStatusRepository, EmployeeTransferStatusRepository>();
+builder.Services.AddScoped<IBankAccountRepository, BankAccountRepository>();
 builder.Services.AddScoped<ISubscriptionPublisher, InMemorySubscriptionPublisher>();
 
 builder.Services.AddHttpClient("TransferService", client =>

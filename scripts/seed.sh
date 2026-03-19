@@ -473,15 +473,9 @@ sleep 2
 
 # ── Bank accounts ────────────────────────────────────────────────────────
 
-log "Waiting for Transfer API..."
-until curl -sf "http://transfer-api:80/api/bankaccounts/employee/00000000-0000-0000-0000-000000000000" > /dev/null 2>&1; do
-  sleep 2
-done
-log "  Transfer API is ready."
-
 log "Creating bank accounts..."
 
-BA1=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA1=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP1_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"1234\",
@@ -491,7 +485,7 @@ BA1=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA1_ID=$(echo "$BA1" | jq -r '.id')
 log "  John Smith — Chase Bank ****1234 — $BA1_ID"
 
-BA2=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA2=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP2_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"5678\",
@@ -501,7 +495,7 @@ BA2=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA2_ID=$(echo "$BA2" | jq -r '.id')
 log "  Sarah Johnson — Chase Bank ****5678 — $BA2_ID"
 
-BA3=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA3=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP3_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"9012\",
@@ -511,7 +505,7 @@ BA3=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA3_ID=$(echo "$BA3" | jq -r '.id')
 log "  Michael Williams — Chase Bank ****9012 — $BA3_ID"
 
-BA4=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA4=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP4_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"3456\",
@@ -521,7 +515,7 @@ BA4=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA4_ID=$(echo "$BA4" | jq -r '.id')
 log "  Emily Brown — Chase Bank ****3456 — $BA4_ID"
 
-BA5=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA5=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP5_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"7890\",
