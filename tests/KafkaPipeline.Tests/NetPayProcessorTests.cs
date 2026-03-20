@@ -183,7 +183,7 @@ public class NetPayProcessorTests
             UpdatedAt = DateTime.UtcNow.ToString("O"),
             DomainEvents = new[]
             {
-                new { EventType = "timeentry.created", EventId = Guid.NewGuid().ToString(), OccurredOn = DateTime.UtcNow.ToString("O") }
+                new { EventType = "timeentry.clockedout", EventId = Guid.NewGuid().ToString(), OccurredOn = DateTime.UtcNow.ToString("O") }
             }
         });
 
