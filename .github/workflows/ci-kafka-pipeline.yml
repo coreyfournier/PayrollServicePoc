@@ -1,4 +1,3 @@
-# .github/workflows/ci-kafka-pipeline.yml
 name: CI - Kafka Pipeline Tests
 
 on:
@@ -7,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
   checks: write
 
 jobs:
@@ -85,14 +85,12 @@ jobs:
           KAFKA_BOOTSTRAP_SERVERS: localhost:29092
           KSQLDB_URL: http://localhost:8088
 
-      - name: Test Report
-        uses: dorny/test-reporter@v1
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
         if: always()
         with:
-          name: Kafka Pipeline Test Results
-          path: '**/TestResults/*.trx'
-          reporter: dotnet-trx
-          fail-on-error: false
+          files: '**/TestResults/*.trx'
+          check_name: Kafka Pipeline Test Results
 
       - name: Tear down
         if: always()
