@@ -94,15 +94,22 @@ public class NetPayProcessorTests
             }
         });
 
-        // Consume from employee-net-pay (wait for message that includes deductions)
+        // Wait for the final message that includes both deductions.
+        // Each event (employee, tax, deduction1, deduction2) triggers a recompute,
+        // so we wait until we see a message with TOTAL_PERCENT_DEDUCTIONS > 0
+        // (the 401k 5% deduction), meaning all events have been processed.
         using var consumer = new TopicConsumer(_fixture.BootstrapServers, $"test-netpay-{Guid.NewGuid():N}");
         consumer.Subscribe("employee-net-pay");
 
         var results = await consumer.ConsumeUntilAsync(
-            messages => messages.Count(m => m.Key.Contains(employeeId)) >= 3,
-            TimeSpan.FromSeconds(45));
+            messages => messages.Any(m =>
+                m.Key.Contains(employeeId) &&
+                m.Value.RootElement.GetProperty("TOTAL_PERCENT_DEDUCTIONS").GetDouble() > 0),
+            TimeSpan.FromSeconds(60));
 
-        var netPayMessage = results.Last(m => m.Key.Contains(employeeId));
+        var netPayMessage = results.Last(m =>
+            m.Key.Contains(employeeId) &&
+            m.Value.RootElement.GetProperty("TOTAL_PERCENT_DEDUCTIONS").GetDouble() > 0);
         var root = netPayMessage.Value.RootElement;
 
         // Gross pay = (75000 / 2080) * 40 = 1442.31 (annual / 2080 hours * payPeriodHours)
@@ -149,7 +156,7 @@ public class NetPayProcessorTests
             }
         });
 
-        // Produce time entry (8 hours)
+        // Produce time entry (8 hours) — use current time so it lands in the same pay period
         var timeEntryId = Guid.NewGuid().ToString();
         var clockIn = DateTime.UtcNow.AddHours(-8);
         var clockOut = DateTime.UtcNow;
@@ -168,20 +175,22 @@ public class NetPayProcessorTests
             }
         });
 
-        // Consume — need >= 2 messages: first from employee event (gross=0), second from time entry (gross=228)
+        // Wait until we see a message with TOTAL_HOURS_WORKED > 0 for this employee,
+        // meaning the time entry has been processed
         using var consumer = new TopicConsumer(_fixture.BootstrapServers, $"test-hourly-{Guid.NewGuid():N}");
         consumer.Subscribe("employee-net-pay");
 
         var results = await consumer.ConsumeUntilAsync(
-            messages => messages.Count(m => m.Key.Contains(employeeId)) >= 2,
-            TimeSpan.FromSeconds(45));
+            messages => messages.Any(m =>
+                m.Key.Contains(employeeId) &&
+                m.Value.RootElement.GetProperty("TOTAL_HOURS_WORKED").GetDouble() > 0),
+            TimeSpan.FromSeconds(60));
 
-        // Take the last message for this employee (after time entry is processed)
-        var latestMessages = results.Where(m => m.Key.Contains(employeeId)).ToList();
-        latestMessages.Should().HaveCountGreaterOrEqualTo(2);
+        var match = results.Last(m =>
+            m.Key.Contains(employeeId) &&
+            m.Value.RootElement.GetProperty("TOTAL_HOURS_WORKED").GetDouble() > 0);
 
-        var last = latestMessages.Last();
-        var grossPay = last.Value.RootElement.GetProperty("GROSS_PAY").GetDouble();
+        var grossPay = match.Value.RootElement.GetProperty("GROSS_PAY").GetDouble();
 
         // Gross = 28.50 * 8 = 228.00
         grossPay.Should().BeApproximately(228.0, 0.1);
