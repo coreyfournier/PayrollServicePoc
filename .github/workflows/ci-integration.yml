@@ -6,6 +6,10 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   payroll-db-tests:
     name: PayrollService Database Tests
@@ -29,6 +33,14 @@ jobs:
       - name: Test
         run: dotnet test tests/PayrollService.DatabaseTests/ --no-build --logger "trx;LogFileName=payroll-db-results.trx"
 
+      - name: Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: PayrollService DB Test Results
+          path: '**/TestResults/*.trx'
+          reporter: dotnet-trx
+
   transfer-db-tests:
     name: TransferService Database Tests
     runs-on: ubuntu-latest
@@ -51,6 +63,14 @@ jobs:
       - name: Test
         run: dotnet test tests/TransferService.DatabaseTests/ --no-build --logger "trx;LogFileName=transfer-db-results.trx"
 
+      - name: Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: TransferService DB Test Results
+          path: '**/TestResults/*.trx'
+          reporter: dotnet-trx
+
   listener-db-tests:
     name: ListenerApi Database Tests
     runs-on: ubuntu-latest
@@ -72,3 +92,11 @@ jobs:
 
       - name: Test
         run: dotnet test tests/ListenerApi.DatabaseTests/ --no-build --logger "trx;LogFileName=listener-db-results.trx"
+
+      - name: Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: ListenerApi DB Test Results
+          path: '**/TestResults/*.trx'
+          reporter: dotnet-trx

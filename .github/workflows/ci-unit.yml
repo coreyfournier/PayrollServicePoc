@@ -6,6 +6,10 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   dotnet:
     name: .NET Build & Test
@@ -31,6 +35,14 @@ jobs:
 
       - name: Unit Tests - TransferService
         run: dotnet test tests/TransferService.UnitTests/ --no-build --logger "trx;LogFileName=transfer-results.trx"
+
+      - name: Test Report
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: .NET Unit Test Results
+          path: '**/TestResults/*.trx'
+          reporter: dotnet-trx
 
   frontend:
     name: Frontend Build & Test
