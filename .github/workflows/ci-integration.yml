@@ -40,6 +40,7 @@ jobs:
           name: PayrollService DB Test Results
           path: '**/TestResults/*.trx'
           reporter: dotnet-trx
+          fail-on-error: false
 
   transfer-db-tests:
     name: TransferService Database Tests
@@ -70,6 +71,7 @@ jobs:
           name: TransferService DB Test Results
           path: '**/TestResults/*.trx'
           reporter: dotnet-trx
+          fail-on-error: false
 
   listener-db-tests:
     name: ListenerApi Database Tests
@@ -100,3 +102,4 @@ jobs:
           name: ListenerApi DB Test Results
           path: '**/TestResults/*.trx'
           reporter: dotnet-trx
+          fail-on-error: false

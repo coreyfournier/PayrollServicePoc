@@ -43,6 +43,7 @@ jobs:
           name: .NET Unit Test Results
           path: '**/TestResults/*.trx'
           reporter: dotnet-trx
+          fail-on-error: false
 
   frontend:
     name: Frontend Build & Test

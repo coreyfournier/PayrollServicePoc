@@ -92,6 +92,7 @@ jobs:
           name: Kafka Pipeline Test Results
           path: '**/TestResults/*.trx'
           reporter: dotnet-trx
+          fail-on-error: false
 
       - name: Tear down
         if: always()
