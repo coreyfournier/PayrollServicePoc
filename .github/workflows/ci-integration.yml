@@ -1,0 +1,74 @@
+name: CI - Integration Tests
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  payroll-db-tests:
+    name: PayrollService Database Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            7.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore tests/PayrollService.DatabaseTests/
+
+      - name: Build
+        run: dotnet build tests/PayrollService.DatabaseTests/ --no-restore
+
+      - name: Test
+        run: dotnet test tests/PayrollService.DatabaseTests/ --no-build --logger "trx;LogFileName=payroll-db-results.trx"
+
+  transfer-db-tests:
+    name: TransferService Database Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            7.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore tests/TransferService.DatabaseTests/
+
+      - name: Build
+        run: dotnet build tests/TransferService.DatabaseTests/ --no-restore
+
+      - name: Test
+        run: dotnet test tests/TransferService.DatabaseTests/ --no-build --logger "trx;LogFileName=transfer-db-results.trx"
+
+  listener-db-tests:
+    name: ListenerApi Database Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            7.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore tests/ListenerApi.DatabaseTests/
+
+      - name: Build
+        run: dotnet build tests/ListenerApi.DatabaseTests/ --no-restore
+
+      - name: Test
+        run: dotnet test tests/ListenerApi.DatabaseTests/ --no-build --logger "trx;LogFileName=listener-db-results.trx"

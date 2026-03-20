@@ -30,7 +30,11 @@ public class EmployeeRepository : IEmployeeRepository
 
     public async Task<Employee> AddAsync(Employee employee, CancellationToken cancellationToken = default)
     {
-        await _context.Employees.InsertOneAsync(employee, cancellationToken: cancellationToken);
+        await _context.Employees.ReplaceOneAsync(
+            e => e.Id == employee.Id,
+            employee,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken);
         return employee;
     }
 
