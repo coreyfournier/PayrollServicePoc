@@ -136,7 +136,7 @@ public class NetPayProcessorTests
         var employeeId = Guid.NewGuid().ToString();
         using var producer = new CloudEventProducer(_fixture.BootstrapServers);
 
-        // Produce hourly employee ($28.50/hr)
+        // Step 1: Produce hourly employee ($28.50/hr)
         await producer.ProduceAsync("employee-events", employeeId, new
         {
             Id = employeeId,
@@ -156,11 +156,19 @@ public class NetPayProcessorTests
             }
         });
 
-        // Wait for the employee event to be processed before sending time entry.
-        // The NetPayProcessor silently drops time entries if employee info isn't in the store yet.
-        await Task.Delay(5000);
+        // Step 2: Wait for the employee event to produce output (proves employee is in the store).
+        // The NetPayProcessor silently drops time entries if employee info isn't stored yet.
+        using var setupConsumer = new TopicConsumer(_fixture.BootstrapServers, $"test-hourly-setup-{Guid.NewGuid():N}");
+        setupConsumer.Subscribe("employee-net-pay");
 
-        // Produce time entry (8 hours) — use current time so it lands in the same pay period
+        var setupResults = await setupConsumer.ConsumeUntilAsync(
+            messages => messages.Any(m => m.Key.Contains(employeeId)),
+            TimeSpan.FromSeconds(30));
+
+        setupResults.Should().Contain(m => m.Key.Contains(employeeId),
+            "employee event should produce a net pay message (proving employee is in the store)");
+
+        // Step 3: Now produce time entry (8 hours) — employee is guaranteed to be in the store
         var timeEntryId = Guid.NewGuid().ToString();
         var clockIn = DateTime.UtcNow.AddHours(-8);
         var clockOut = DateTime.UtcNow;
@@ -179,8 +187,7 @@ public class NetPayProcessorTests
             }
         });
 
-        // Wait until we see a message with TOTAL_HOURS_WORKED > 0 for this employee,
-        // meaning the time entry has been processed
+        // Step 4: Wait for a message with TOTAL_HOURS_WORKED > 0 (proves time entry was processed)
         using var consumer = new TopicConsumer(_fixture.BootstrapServers, $"test-hourly-{Guid.NewGuid():N}");
         consumer.Subscribe("employee-net-pay");
 
