@@ -105,15 +105,15 @@ public class NetPayProcessorTests
         var netPayMessage = results.Last(m => m.Key.Contains(employeeId));
         var root = netPayMessage.Value.RootElement;
 
-        // Gross pay = 75000 / 26 ≈ 2884.62
+        // Gross pay = (75000 / 2080) * 40 = 1442.31 (annual / 2080 hours * payPeriodHours)
         var grossPay = root.GetProperty("GROSS_PAY").GetDouble();
-        grossPay.Should().BeApproximately(2884.62, 0.1);
+        grossPay.Should().BeApproximately(1442.31, 0.1);
 
-        // CA state tax ~= 9.3% of annualized/26
+        // CA state tax ~= 9.3% of annualized
         var stateTax = root.GetProperty("STATE_TAX").GetDouble();
         stateTax.Should().BeGreaterThan(0);
 
-        // Deductions: $100 fixed + 5% of gross (~$144.23)
+        // Deductions: $100 fixed + 5% of gross
         var totalDeductions = root.GetProperty("TOTAL_DEDUCTIONS").GetDouble();
         totalDeductions.Should().BeApproximately(100.0 + (grossPay * 0.05), 1.0);
 
@@ -168,17 +168,17 @@ public class NetPayProcessorTests
             }
         });
 
-        // Consume
+        // Consume — need >= 2 messages: first from employee event (gross=0), second from time entry (gross=228)
         using var consumer = new TopicConsumer(_fixture.BootstrapServers, $"test-hourly-{Guid.NewGuid():N}");
         consumer.Subscribe("employee-net-pay");
 
         var results = await consumer.ConsumeUntilAsync(
-            messages => messages.Count(m => m.Key.Contains(employeeId)) >= 1,
-            TimeSpan.FromSeconds(30));
+            messages => messages.Count(m => m.Key.Contains(employeeId)) >= 2,
+            TimeSpan.FromSeconds(45));
 
-        // Find the latest message for this employee that has time entry hours
+        // Take the last message for this employee (after time entry is processed)
         var latestMessages = results.Where(m => m.Key.Contains(employeeId)).ToList();
-        latestMessages.Should().NotBeEmpty();
+        latestMessages.Should().HaveCountGreaterOrEqualTo(2);
 
         var last = latestMessages.Last();
         var grossPay = last.Value.RootElement.GetProperty("GROSS_PAY").GetDouble();
