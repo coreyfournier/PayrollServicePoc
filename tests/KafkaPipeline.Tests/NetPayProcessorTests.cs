@@ -156,6 +156,10 @@ public class NetPayProcessorTests
             }
         });
 
+        // Wait for the employee event to be processed before sending time entry.
+        // The NetPayProcessor silently drops time entries if employee info isn't in the store yet.
+        await Task.Delay(5000);
+
         // Produce time entry (8 hours) — use current time so it lands in the same pay period
         var timeEntryId = Guid.NewGuid().ToString();
         var clockIn = DateTime.UtcNow.AddHours(-8);
@@ -186,11 +190,14 @@ public class NetPayProcessorTests
                 m.Value.RootElement.GetProperty("TOTAL_HOURS_WORKED").GetDouble() > 0),
             TimeSpan.FromSeconds(60));
 
-        var match = results.Last(m =>
+        var matchingMessages = results.Where(m =>
             m.Key.Contains(employeeId) &&
-            m.Value.RootElement.GetProperty("TOTAL_HOURS_WORKED").GetDouble() > 0);
+            m.Value.RootElement.GetProperty("TOTAL_HOURS_WORKED").GetDouble() > 0).ToList();
 
-        var grossPay = match.Value.RootElement.GetProperty("GROSS_PAY").GetDouble();
+        matchingMessages.Should().NotBeEmpty(
+            "expected at least one message with TOTAL_HOURS_WORKED > 0 for employee {0}", employeeId);
+
+        var grossPay = matchingMessages.Last().Value.RootElement.GetProperty("GROSS_PAY").GetDouble();
 
         // Gross = 28.50 * 8 = 228.00
         grossPay.Should().BeApproximately(228.0, 0.1);
