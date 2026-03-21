@@ -29,10 +29,13 @@ jobs:
       - name: Restore
         run: dotnet restore tests/PayrollService.DatabaseTests/
 
+      - name: Pull MongoDB container image
+        run: docker pull mongo:7.0
+
       - name: Build
         run: dotnet build tests/PayrollService.DatabaseTests/ --no-restore
 
-      - name: Test
+      - name: Run tests against MongoDB (Testcontainers)
         run: dotnet test tests/PayrollService.DatabaseTests/ --no-build --logger "trx;LogFileName=payroll-db-results.trx"
 
       - name: Publish Test Results
@@ -58,10 +61,13 @@ jobs:
       - name: Restore
         run: dotnet restore tests/TransferService.DatabaseTests/
 
+      - name: Pull MongoDB container image
+        run: docker pull mongo:7.0
+
       - name: Build
         run: dotnet build tests/TransferService.DatabaseTests/ --no-restore
 
-      - name: Test
+      - name: Run tests against MongoDB (Testcontainers)
         run: dotnet test tests/TransferService.DatabaseTests/ --no-build --logger "trx;LogFileName=transfer-db-results.trx"
 
       - name: Publish Test Results
@@ -87,10 +93,13 @@ jobs:
       - name: Restore
         run: dotnet restore tests/ListenerApi.DatabaseTests/
 
+      - name: Pull MySQL container image
+        run: docker pull mysql:8.0
+
       - name: Build
         run: dotnet build tests/ListenerApi.DatabaseTests/ --no-restore
 
-      - name: Test
+      - name: Run tests against MySQL (Testcontainers)
         run: dotnet test tests/ListenerApi.DatabaseTests/ --no-build --logger "trx;LogFileName=listener-db-results.trx"
 
       - name: Publish Test Results
