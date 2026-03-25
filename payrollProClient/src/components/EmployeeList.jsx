@@ -4,12 +4,17 @@ import { EMPLOYEE_CHANGE_SUBSCRIPTION, TRANSFER_CHANGE_SUBSCRIPTION } from '../g
 import { useState, useEffect, useRef, useCallback } from 'react';
 import TransferPanel from './TransferPanel';
 
-function PayDetailModal({ employee, onClose, onTransfer }) {
+function PayDetailModal({ employee, transfers, onClose, onTransfer }) {
   const pa = employee.payAttributes;
   if (!pa) return null;
 
   const formatCurrency = (val) => `$${Number(val).toFixed(2)}`;
   const payTypeLabel = pa.payType === '2' || pa.payType === 'Salary' ? 'Salary' : 'Hourly';
+  const period = String(pa.payPeriodNumber);
+  const transferredAmount = (transfers || [])
+    .filter(t => t.status !== 'Failed' && String(t.payPeriodNumber) === period)
+    .reduce((sum, t) => sum + Number(t.amount), 0);
+  const availableBalance = Number(pa.netPay) - transferredAmount;
 
   return (
     <div className="confirm-modal-overlay" onClick={onClose}>
@@ -63,6 +68,18 @@ function PayDetailModal({ employee, onClose, onTransfer }) {
 
           <div className="pay-detail-label pay-detail-net-label">Net Pay</div>
           <div className="pay-detail-value pay-detail-net">{formatCurrency(pa.netPay)}</div>
+
+          {transferredAmount > 0 && (
+            <>
+              <div className="pay-detail-label">Transfers</div>
+              <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(transferredAmount)}</div>
+            </>
+          )}
+
+          <div className="pay-detail-separator" />
+
+          <div className="pay-detail-label pay-detail-net-label">Available Balance</div>
+          <div className="pay-detail-value pay-detail-net">{formatCurrency(availableBalance)}</div>
         </div>
         <div className="pay-detail-actions">
           <button className="btn btn-primary" onClick={onTransfer}>
@@ -282,6 +299,7 @@ export default function EmployeeList() {
       {selectedEmployee && view === 'pay' && (
         <PayDetailModal
           employee={selectedEmployee}
+          transfers={transferMap[selectedEmployeeId] || []}
           onClose={() => { setSelectedEmployeeId(null); setView('pay'); }}
           onTransfer={() => { setTransferFromPay(true); setView('transfer'); }}
         />
@@ -322,7 +340,7 @@ export default function EmployeeList() {
                   <th>Email</th>
                   <th>Pay Type</th>
                   <th>Pay Rate</th>
-                  <th>Net Pay</th>
+                  <th>Available</th>
                   <th>Transfers</th>
                   <th>Status</th>
                   <th>Last Event</th>
@@ -351,7 +369,14 @@ export default function EmployeeList() {
                       onClick={() => employee.payAttributes && setSelectedEmployeeId(employee.id)}
                     >
                       {employee.payAttributes
-                        ? `$${Number(employee.payAttributes.netPay).toFixed(2)}`
+                        ? (() => {
+                            const netPay = Number(employee.payAttributes.netPay);
+                            const period = String(employee.payAttributes.payPeriodNumber);
+                            const transferred = (transferMap[employee.id] || [])
+                              .filter(t => t.status !== 'Failed' && String(t.payPeriodNumber) === period)
+                              .reduce((sum, t) => sum + Number(t.amount), 0);
+                            return `$${(netPay - transferred).toFixed(2)}`;
+                          })()
                         : '\u2014'}
                     </td>
                     <td className="transfer-indicator-cell">
