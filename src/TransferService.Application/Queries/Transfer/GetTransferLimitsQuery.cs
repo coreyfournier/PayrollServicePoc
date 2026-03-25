@@ -37,7 +37,7 @@ public class GetTransferLimitsQueryHandler : IRequestHandler<GetTransferLimitsQu
 
         var todayStart = DateTime.UtcNow.Date;
         var transfersToday = await _repository.GetCountByEmployeeAndDateAsync(
-            request.EmployeeId, todayStart, cancellationToken);
+            request.EmployeeId, todayStart, cancellationToken: cancellationToken);
 
         var employeeOverride = await _limitsRepository.GetByEmployeeIdAsync(request.EmployeeId, cancellationToken);
         var isCustom = employeeOverride != null;

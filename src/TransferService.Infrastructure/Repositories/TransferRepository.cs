@@ -36,11 +36,20 @@ public class TransferRepository : ITransferRepository
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<int> GetCountByEmployeeAndDateAsync(Guid employeeId, DateTime date, CancellationToken cancellationToken = default)
+    public async Task<int> GetCountByEmployeeAndDateAsync(Guid employeeId, DateTime date, Guid? excludeTransferId = null, CancellationToken cancellationToken = default)
     {
         var nextDay = date.AddDays(1);
+        var builder = Builders<Transfer>.Filter;
+        var filter = builder.Eq(t => t.EmployeeId, employeeId)
+            & builder.Gte(t => t.InitiatedAt, date)
+            & builder.Lt(t => t.InitiatedAt, nextDay)
+            & builder.Ne(t => t.Status, TransferStatus.Failed);
+
+        if (excludeTransferId.HasValue)
+            filter &= builder.Ne(t => t.Id, excludeTransferId.Value);
+
         return (int)await _dbContext.Transfers
-            .CountDocumentsAsync(t => t.EmployeeId == employeeId && t.InitiatedAt >= date && t.InitiatedAt < nextDay, cancellationToken: cancellationToken);
+            .CountDocumentsAsync(filter, cancellationToken: cancellationToken);
     }
 
     public async Task<IEnumerable<Transfer>> GetRecentAsync(int limit = 50, string? statusFilter = null, CancellationToken cancellationToken = default)
