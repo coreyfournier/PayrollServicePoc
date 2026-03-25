@@ -44,7 +44,7 @@ cd payrollProClient && npm install && npm run dev
 docker-compose up seed              # Run after the stack is up
 ```
 
-The seed service is the **single initialization entry point** — it creates Kafka topics, initializes ksqlDB streams/tables, registers the Elasticsearch sink connector, and seeds data (5 employees, 40 time entries, 5 tax records, 7 deductions) via the REST API. This exercises the full event pipeline (MassTransit outbox → Kafka → ksqlDB → ListenerApi → GraphQL). The script (`scripts/seed.sh`) clears existing data first, making it safe to re-run. Requires `payroll-api`, `listener-api`, `kafka`, `elasticsearch`, and `kafka-connect` to be healthy.
+The seed service is the **single initialization entry point** — it creates Kafka topics, initializes ksqlDB streams/tables, registers the Debezium outbox connector, and seeds data (5 employees, 40 time entries, 5 tax records, 7 deductions) via the REST API. This exercises the full event pipeline (MassTransit outbox → Kafka → ksqlDB → ListenerApi → GraphQL). The script (`scripts/seed.sh`) clears existing data first, making it safe to re-run. Requires `payroll-api`, `listener-api`, `kafka`, and `kafka-connect` to be healthy.
 
 The `kafka-init` and `ksqldb-init` services are available standalone under the `init` profile (`docker-compose --profile init up kafka-init`) but do not auto-start — seed handles everything.
 
@@ -126,7 +126,7 @@ Consumers parse CloudEvent JSON envelopes for backward compatibility with the ks
 | ksqldb-server | 8088 | REST API |
 | mongodb | 27017 | Replica set, connect with `?directConnection=true` |
 | mysql | 3306 | |
-| kafka-connect | 8083 | ES sink connector REST API |
+| kafka-connect | 8083 | Debezium CDC connector REST API |
 | zipkin | 9411 | Distributed tracing |
 
 ### Kafka Topics
@@ -461,7 +461,7 @@ All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka e
 - `scripts/seed.sh` — API-based seed script (runs as Docker container, exercises full event pipeline)
 - `src/NetPayProcessor/` — Kafka Streams Java app for net pay calculation
 - `src/ElasticsearchUpdater/` — Kafka consumer Java app combining employee info + net pay for Elasticsearch
-- `docker/Dockerfile.kafka-connect` — Kafka Connect image with Elasticsearch connector
+- `docker/Dockerfile.kafka-connect` — Kafka Connect image with Debezium connector
 - `src/TransferService.Api/Program.cs` — TransferService DI, MassTransit saga + RabbitMQ + Kafka Rider registration
 - `src/TransferService.Application/Messages/TransferMessages.cs` — all transfer message types
 - `src/TransferService.Api/Sagas/TransferStateMachine.cs` — MassTransit saga for transfer orchestration
