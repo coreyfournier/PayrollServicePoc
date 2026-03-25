@@ -15,6 +15,12 @@ docker-compose down -v            # Tear down with volumes
 docker-compose up -d zookeeper kafka mongodb zipkin  # Infrastructure only
 ```
 
+### Elasticsearch (optional, profiled out by default)
+```bash
+docker-compose --profile elasticsearch up -d  # Start ES services
+```
+Requires re-adding the ES connector plugin to `docker/Dockerfile.kafka-connect` and setting `VITE_ENABLE_SEARCH=true` for the frontend.
+
 ### Backend build (local)
 ```bash
 dotnet build PayrollService.sln
@@ -120,13 +126,12 @@ Consumers parse CloudEvent JSON envelopes for backward compatibility with the ks
 | ksqldb-server | 8088 | REST API |
 | mongodb | 27017 | Replica set, connect with `?directConnection=true` |
 | mysql | 3306 | |
-| elasticsearch | 9200 | Search index |
 | kafka-connect | 8083 | ES sink connector REST API |
 | zipkin | 9411 | Distributed tracing |
 
 ### Kafka Topics
 
-`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `employee-net-pay`, `employee-search`, `employee-info` — created by the seed script (topic creation runs before ksqlDB initialization). Additional internal topics (`employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must be pre-created with 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs; the seed script ensures this ordering.
+`employee-events`, `timeentry-events`, `taxinfo-events`, `deduction-events`, `employee-net-pay`, `employee-info` — created by the seed script (topic creation runs before ksqlDB initialization). Additional internal topics (`employee-net-pay-by-period`, `EMPLOYEE_INFO_EVENTS`) are managed by ksqlDB. **Important:** `employee-info` must be pre-created with 3 partitions before ksqlDB's `EMPLOYEE_INFO` CTAS runs; the seed script ensures this ordering.
 
 ### ksqlDB Stream Processing
 
@@ -211,6 +216,8 @@ When a **deduction event** arrives: update deductionStore → recompute net pay 
 - `src/NetPayProcessor/src/main/java/com/payroll/netpay/TaxCalculator.java` — progressive bracket + state tax logic
 
 ### Elasticsearch Updater (Kafka Consumer, Java 17)
+
+> **Profiled out by default.** Run `docker-compose --profile elasticsearch up -d` to enable. Requires re-adding the ES connector plugin to `docker/Dockerfile.kafka-connect`.
 
 Standalone Kafka consumer application (`src/ElasticsearchUpdater/`) that combines employee info with their last 4 pay periods into a single search document. Connects directly to Kafka.
 
@@ -471,4 +478,4 @@ All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka e
 
 ## Known Issues
 
-- Re-running ksqlDB initialization (via seed or `--profile init`) drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover: they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. No manual intervention needed.
+- Re-running ksqlDB initialization (via seed or `--profile init`) drops and recreates topics (via `DELETE TOPIC`), which causes the running `net-pay-processor` and `elasticsearch-updater` to lose their source topics. Both auto-recover (when running via the `elasticsearch` profile): they detect the error state, wait 30 seconds for topics to be recreated, then restart their full lifecycle. No manual intervention needed.
