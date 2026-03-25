@@ -25,7 +25,6 @@ TRANSFER_API="http://transfer-api:80/api"
 LISTENER="http://listener-api:80"
 BOOTSTRAP=kafka:9092
 KSQL="http://ksqldb-server:8088"
-ES="http://elasticsearch:9200"
 CONNECT="http://kafka-connect:8083"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -129,7 +128,7 @@ conn = mysql.connector.connect(
     user='listener_user', password='listener_password'
 )
 cursor = conn.cursor()
-for table in ['OutboxMessages', 'TransferRecords', 'EmployeePayAttributes', 'EmployeeRecords']:
+for table in ['OutboxMessages', 'TransferRecords', 'EmployeePayAttributes', 'EmployeeTransferStatuses', 'EmployeeRecords']:
     try:
         cursor.execute(f'DELETE FROM {table}')
         conn.commit()
@@ -193,7 +192,6 @@ kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic taxinfo-events
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic deduction-events
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
-kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-requests
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-events
@@ -215,16 +213,14 @@ log "  Purged non-compacted topics"
 # employee-info is included because elasticsearch-updater may auto-create it with 1 partition
 # before seed runs; deleting ensures it gets recreated with the correct 3 partitions.
 kafka-topics --delete --topic employee-net-pay --bootstrap-server $BOOTSTRAP 2>/dev/null || true
-kafka-topics --delete --topic employee-search --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 kafka-topics --delete --topic employee-info --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 sleep 2
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
-kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-search --config cleanup.policy=compact
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
-log "  Recreated compacted topics (employee-net-pay, employee-search, employee-info)"
+log "  Recreated compacted topics (employee-net-pay, employee-info)"
 
 # Fix partition count for any topics that were auto-created with 1 partition by consumers
-ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events employee-net-pay employee-search employee-info transfer-requests transfer-events"
+ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events employee-net-pay employee-info transfer-requests transfer-events"
 for topic in $ALL_TOPICS; do
   kafka-topics --alter --topic $topic --partitions 3 --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 done
@@ -253,65 +249,9 @@ fi
 log "Clean slate complete."
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PHASE 4: Set up infrastructure (Elasticsearch, Kafka Connect, ksqlDB)
+# PHASE 4: Set up infrastructure (Kafka Connect, ksqlDB)
 #   All backing topics exist and are empty. Create infrastructure on top.
 # ══════════════════════════════════════════════════════════════════════════════
-
-# ── Elasticsearch index ──────────────────────────────────────────────────
-
-log "Waiting for Elasticsearch..."
-until curl -sf "$ES/_cluster/health" > /dev/null 2>&1; do
-  sleep 5
-done
-log "  Elasticsearch is ready."
-
-# Delete existing index (clean slate)
-curl -sf -X DELETE "$ES/employee-search" > /dev/null 2>&1 || true
-
-# Create index with explicit mappings
-log "Creating employee-search index with mappings..."
-curl -sf -X PUT "$ES/employee-search" \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "settings": {
-    "number_of_shards": 1,
-    "number_of_replicas": 0
-  },
-  "mappings": {
-    "properties": {
-      "employee_id": { "type": "keyword" },
-      "first_name": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
-      "last_name": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
-      "email": { "type": "keyword" },
-      "pay_type": { "type": "keyword" },
-      "pay_rate": { "type": "double" },
-      "pay_period_hours": { "type": "double" },
-      "is_active": { "type": "boolean" },
-      "hire_date": { "type": "date", "format": "strict_date_optional_time||yyyy-MM-dd'\''T'\''HH:mm:ss'\''Z'\''||yyyy-MM-dd'\''T'\''HH:mm:ssX||epoch_millis" },
-      "pay_periods": {
-        "type": "nested",
-        "properties": {
-          "pay_period_number": { "type": "long" },
-          "gross_pay": { "type": "double" },
-          "federal_tax": { "type": "double" },
-          "state_tax": { "type": "double" },
-          "additional_federal_withholding": { "type": "double" },
-          "additional_state_withholding": { "type": "double" },
-          "total_tax": { "type": "double" },
-          "total_fixed_deductions": { "type": "double" },
-          "total_percent_deductions": { "type": "double" },
-          "total_deductions": { "type": "double" },
-          "net_pay": { "type": "double" },
-          "pay_rate": { "type": "double" },
-          "pay_type": { "type": "keyword" },
-          "total_hours_worked": { "type": "double" },
-          "pay_period_start": { "type": "date", "format": "strict_date_optional_time||yyyy-MM-dd'\''T'\''HH:mm:ss" },
-          "pay_period_end": { "type": "date", "format": "strict_date_optional_time||yyyy-MM-dd'\''T'\''HH:mm:ss" }
-        }
-      }
-    }
-  }
-}' > /dev/null && log "  Index created." || log "  Index creation failed."
 
 # ── Kafka Connect connectors ────────────────────────────────────────────
 
@@ -320,30 +260,6 @@ until curl -sf "$CONNECT/connectors" > /dev/null 2>&1; do
   sleep 5
 done
 log "  Kafka Connect is ready."
-
-# Delete existing connector (idempotent)
-curl -sf -X DELETE "$CONNECT/connectors/elasticsearch-sink" > /dev/null 2>&1 || true
-
-# Register ES Sink Connector
-log "Registering Elasticsearch sink connector..."
-curl -sf -X POST "$CONNECT/connectors" \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "name": "elasticsearch-sink",
-  "config": {
-    "connector.class": "io.confluent.connect.elasticsearch.ElasticsearchSinkConnector",
-    "topics": "employee-search",
-    "connection.url": "http://elasticsearch:9200",
-    "type.name": "_doc",
-    "key.ignore": false,
-    "schema.ignore": true,
-    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-    "value.converter.schemas.enable": false,
-    "behavior.on.null.values": "delete",
-    "write.method": "upsert"
-  }
-}' > /dev/null && log "  Connector registered." || log "  Connector registration failed."
 
 # Register Debezium MySQL Source Connector (Outbox Pattern)
 # Tails MySQL binlog, reads OutboxMessages table inserts, routes to Kafka topic
@@ -740,16 +656,6 @@ log "  Emily Brown — \$150 transfer (period $CURRENT_PAY_PERIOD)"
 # PHASE 6: Verify
 # ══════════════════════════════════════════════════════════════════════════════
 
-log "Waiting for Elasticsearch documents to appear..."
-sleep 15
-
-ES_COUNT=$(curl -sf "$ES/employee-search/_count" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
-log "  Elasticsearch employee-search index: $ES_COUNT documents"
-
-CONNECTOR_STATE=$(curl -sf "$CONNECT/connectors/elasticsearch-sink/status" 2>/dev/null \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('connector',{}).get('state','UNKNOWN'))" 2>/dev/null || echo "UNKNOWN")
-log "  Kafka Connect elasticsearch-sink connector: $CONNECTOR_STATE"
-
 # ── Done ────────────────────────────────────────────────────────────────────
 
 log ""
@@ -760,11 +666,8 @@ log "  40 time entries created (20 each for Sarah Johnson & Emily Brown)"
 log "  5 tax records created"
 log "  7 deductions created"
 log "  2 transfers initiated (via Listener API)"
-log "  $ES_COUNT Elasticsearch documents"
 log ""
 log "Verify with:"
 log "  curl http://localhost:5000/api/employees"
 log "  curl http://localhost:5000/api/timeentries/employee/$EMP2_ID"
-log "  curl http://localhost:9200/employee-search/_search?pretty"
-log "  curl http://localhost:8083/connectors/elasticsearch-sink/status"
 log "  Check Kafka UI at http://localhost:8080"
