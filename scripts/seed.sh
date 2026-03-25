@@ -226,24 +226,30 @@ for topic in $ALL_TOPICS; do
 done
 log "  Verified all topics have 3 partitions"
 
-# Restart Kafka-dependent services whose MassTransit consumers fault when
-# subscribed topics are deleted/recreated. The Java services (net-pay-processor,
-# elasticsearch-updater) auto-recover, but listener-api's MassTransit Kafka Rider
-# gets stuck in exponential backoff retries.
+# Restart Kafka-dependent .NET services whose MassTransit Kafka Rider consumers
+# fault when subscribed topics are deleted/recreated. The Java services
+# (net-pay-processor, elasticsearch-updater) auto-recover, but MassTransit gets
+# stuck in exponential backoff retries.
 log "Restarting Kafka-dependent services..."
 if [ -S /var/run/docker.sock ]; then
-  curl -sf -X POST "http://localhost/v1.24/containers/listener-api/restart?t=5" \
-    --unix-socket /var/run/docker.sock > /dev/null \
-    && log "  Restarted listener-api" \
-    || log "  Could not restart listener-api (may need manual restart)"
-  # Wait for listener-api to be healthy again
+  for svc in listener-api transfer-api; do
+    curl -sf -X POST "http://localhost/v1.24/containers/$svc/restart?t=5" \
+      --unix-socket /var/run/docker.sock > /dev/null \
+      && log "  Restarted $svc" \
+      || log "  Could not restart $svc (may need manual restart)"
+  done
+  # Wait for both services to be healthy again
   until curl -sf "http://listener-api:80/graphql?query=%7B__typename%7D" > /dev/null 2>&1; do
     sleep 3
   done
   log "  listener-api is healthy."
+  until curl -sf "http://transfer-api:80/api/transfers/employee/00000000-0000-0000-0000-000000000000" > /dev/null 2>&1; do
+    sleep 3
+  done
+  log "  transfer-api is healthy."
 else
   log "  Docker socket not available — skip service restart"
-  log "  NOTE: You may need to manually restart listener-api if it has stale Kafka consumers"
+  log "  NOTE: You may need to manually restart listener-api and transfer-api if they have stale Kafka consumers"
 fi
 
 log "Clean slate complete."
