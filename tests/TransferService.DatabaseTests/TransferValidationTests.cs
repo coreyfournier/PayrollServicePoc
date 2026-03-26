@@ -15,39 +15,9 @@ public class TransferValidationTests
 
     public TransferValidationTests(MongoDbFixture fixture) => _fixture = fixture;
 
-    [Fact]
-    public async Task Validate_NonExistentBankAccount_Fails()
-    {
-        using var scope = _fixture.Services.CreateScope();
-        var validator = scope.ServiceProvider.GetRequiredService<ITransferValidationService>();
-
-        var request = new TransferValidationRequest(
-            Guid.NewGuid(), 100m, 55, Guid.NewGuid());
-
-        var result = await validator.ValidateAsync(request);
-        result.CanTransfer.Should().BeFalse();
-        result.Reasons.Should().Contain(r => r.Contains("Bank account"));
-    }
-
-    [Fact]
-    public async Task Validate_WrongEmployeeBankAccount_Fails()
-    {
-        using var scope = _fixture.Services.CreateScope();
-        var bankRepo = scope.ServiceProvider.GetRequiredService<IBankAccountRepository>();
-        var validator = scope.ServiceProvider.GetRequiredService<ITransferValidationService>();
-
-        var ownerEmployeeId = Guid.NewGuid();
-        var otherEmployeeId = Guid.NewGuid();
-        var account = BankAccount.Create(ownerEmployeeId, "Chase", "****1234", "021000021", BankAccountType.Checking);
-        await bankRepo.AddAsync(account);
-
-        var request = new TransferValidationRequest(
-            otherEmployeeId, 100m, 55, account.Id);
-
-        var result = await validator.ValidateAsync(request);
-        result.CanTransfer.Should().BeFalse();
-        result.Reasons.Should().Contain(r => r.Contains("belong"));
-    }
+    // Bank account validation (existence + ownership) was moved to ListenerApi
+    // as part of the transfer-api independence design. TransferValidationService
+    // no longer checks bank accounts — it accepts BankAccountId as opaque.
 
     [Fact]
     public async Task Validate_InProgressTransfer_ExcludesCurrentTransferId()

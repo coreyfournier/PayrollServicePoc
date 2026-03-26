@@ -3,6 +3,7 @@ using System;
 using ListenerApi.Data.DbContext;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,57 +11,16 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace ListenerApi.Data.Migrations
 {
     [DbContext(typeof(ListenerDbContext))]
-    partial class ListenerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260317112052_AddEmployeeTransferStatus")]
+    partial class AddEmployeeTransferStatus
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
                 .HasAnnotation("ProductVersion", "7.0.15")
                 .HasAnnotation("Relational:MaxIdentifierLength", 64);
-
-            modelBuilder.Entity("ListenerApi.Data.Entities.BankAccount", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("char(36)");
-
-                    b.Property<string>("AccountNumberMasked")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("varchar(10)");
-
-                    b.Property<int>("AccountType")
-                        .HasColumnType("int");
-
-                    b.Property<string>("BankName")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("varchar(100)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<Guid>("EmployeeId")
-                        .HasColumnType("char(36)");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("tinyint(1)");
-
-                    b.Property<string>("RoutingNumber")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("varchar(20)");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EmployeeId");
-
-                    b.ToTable("BankAccounts");
-                });
 
             modelBuilder.Entity("ListenerApi.Data.Entities.EmployeePayAttributes", b =>
                 {
@@ -341,17 +301,6 @@ namespace ListenerApi.Data.Migrations
                     b.HasIndex("EmployeeId", "PayPeriodNumber");
 
                     b.ToTable("TransferRecords");
-                });
-
-            modelBuilder.Entity("ListenerApi.Data.Entities.BankAccount", b =>
-                {
-                    b.HasOne("ListenerApi.Data.Entities.EmployeeRecord", "Employee")
-                        .WithMany()
-                        .HasForeignKey("EmployeeId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("Employee");
                 });
 
             modelBuilder.Entity("ListenerApi.Data.Entities.EmployeePayAttributes", b =>

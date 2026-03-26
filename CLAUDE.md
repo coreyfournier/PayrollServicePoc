@@ -88,7 +88,7 @@ Separate bounded context for bank transfers, extracted from PayrollService. Has 
 - **Infrastructure**: Separate `TransferMongoDbContext`, `TransferEventPublisher` (Kafka, used by bridge consumer), ksqlDB balance service, simulated bank service.
 - **Api**: ASP.NET Core controllers, MassTransit saga state machine (RabbitMQ orchestration), Kafka bridge consumer, workflow step consumers. Runs on port 5002.
 
-The frontend nginx config routes `/api/transfers/` and `/api/bankaccounts/` to `transfer-api`, all other `/api/` requests to `payroll-api`.
+The frontend nginx config routes `/api/transfers/` to `transfer-api`, `/api/bankaccounts/` to `listener-api`, and all other `/api/` requests to `payroll-api`.
 
 ### Write Path (MassTransitUnitOfWork)
 
@@ -111,13 +111,14 @@ Consumers parse CloudEvent JSON envelopes for backward compatibility with the ks
 **Entities:**
 - `EmployeeRecord` — employee data from `employee-events` topic
 - `EmployeePayAttributes` — 1:1 with `EmployeeRecord`, stores latest pay period net pay breakdown from `employee-net-pay` topic. PK = `EmployeeId` (FK to `EmployeeRecord`, cascade delete). Exposed via GraphQL as `payAttributes` nested field on employees.
+- `BankAccount` — employee bank accounts for transfers. CRUD via REST (`/api/bankaccounts`). Owned by ListenerApi; transfer-api accepts `BankAccountId` as an opaque reference without validating ownership.
 
 ### Service Ports (Docker)
 
 | Service | Port | Notes |
 |---------|------|-------|
 | payroll-api | 5000 | Swagger at /swagger |
-| transfer-api | 5002 | Swagger at /swagger, transfers & bank accounts |
+| transfer-api | 5002 | Swagger at /swagger, transfers only |
 | listener-api | 5001 | GraphQL at /graphql |
 | frontend | 3000 | REST client |
 | payrollpro-client | 3001 | GraphQL client |
@@ -137,7 +138,7 @@ Consumers parse CloudEvent JSON envelopes for backward compatibility with the ks
 
 ksqlDB processes the `employee-events` Kafka topic to produce the `employee-info` compacted topic (latest employee state per ID) for the ElasticsearchUpdater, and materializes the `employee-net-pay` topic as a SOURCE TABLE for pull queries. Defined in `ksqldb/statements.sql`, executed by the seed script on startup (after topic creation).
 
-**Pipeline (4 objects):**
+**Pipeline (9 objects):**
 
 ```
 employee-events topic
@@ -147,6 +148,15 @@ employee-events topic
 
 employee-net-pay topic (produced by NetPayProcessor)
   → EMPLOYEE_NET_PAY_BY_PERIOD source table (keyed by EMPLOYEE_ID + PAY_PERIOD_NUMBER)
+
+transfer-events topic
+  → TRANSFER_EVENTS_RAW stream (raw CloudEvent envelope)
+  └→ TRANSFER_COMPLETED stream (filtered for Status = 'Completed')
+      → TRANSFER_USAGE_BY_PERIOD table (COUNT + SUM per employee + pay period)
+      → TRANSFER_USAGE_BY_DAY table (COUNT per employee + date)
+
+transfer-limits topic (published by transfer-api)
+  → TRANSFER_LIMITS source table (latest limits per employee)
 ```
 
 **Key design decisions:**
@@ -393,15 +403,15 @@ All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka e
 
 | Step | Simulated Delay | Notes |
 |------|----------------|-------|
-| Validation | 1-3s random | Inline in saga, checks bank account + transfer limits |
+| Validation | 1-3s random | Inline in saga, checks transfer limits (bank account validated by ListenerApi before outbox) |
 | BalanceCheck | 1-5s random | RunBalanceCheckConsumer queries ksqlDB for employee net pay |
 | FraudCheck | 4s fixed | RunFraudCheckConsumer (always passes) |
 | BankTransfer | 1-10s random | RunBankTransferConsumer calls SimulatedBankService (~20% failure) |
 | Complete | — | Final step, marked when bank transfer succeeds |
 
 **Two Databases:**
-- **transfer_db** (MongoDB) — authoritative transfer and bank account data. Collections: `transfers`, `bank_accounts`, `transfer_sagas`.
-- **listener_db.TransferRecords** (MySQL) — read model materialized from Kafka `transfer-events` topic via ListenerApi. Used for client queries and GraphQL subscriptions.
+- **transfer_db** (MongoDB) — authoritative transfer data. Collections: `transfers`, `transfer_sagas`.
+- **listener_db** (MySQL) — read model materialized from Kafka topics via ListenerApi. Also owns bank accounts (`BankAccounts` table) and transfer status. Used for client queries and GraphQL subscriptions.
 
 **MassTransit Saga State Machine:**
 - `TransferStateMachine` orchestrates the full transfer lifecycle using **RabbitMQ** for all inter-service messaging.
@@ -415,8 +425,12 @@ All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka e
 
 **Transfer Limits:**
 - Configurable via environment variables: `TransferLimits__MaxPerPayPeriod`, `TransferLimits__MaxAmountPerPayPeriod`, `TransferLimits__MaxPerDay`.
+- Only **Completed** transfers count toward limits. In-progress and failed transfers do not consume limit budget.
 - Transfer-api enforces authoritatively inside the saga. ListenerApi does a best-effort pre-check from its own materialized MySQL data.
-- The `GET /api/transfers/employee/{id}/limits` endpoint returns limits + current usage + `canTransfer` boolean.
+- The `GET /api/transfers/employee/{id}/limits` endpoint returns limits + current usage + `canTransfer` boolean + `totalAmountTransferred`.
+- When custom limits are created/updated/deleted, transfer-api publishes `EmployeeLimitsUpdated` to RabbitMQ → `LimitsKafkaBridgeConsumer` → Kafka `transfer-limits` topic → ListenerApi → MySQL `EmployeeTransferStatuses` → GraphQL subscription.
+- **Available balance** = net pay - totalAmountTransferred (completed transfers in current period). Displayed in both frontends.
+- **canTransfer** flag computed in ListenerApi from limits + completed transfer usage. When false, transfer forms are disabled in both frontends.
 
 **Simulated Bank Service:**
 - `SimulatedBankService` adds random delays (1-10s) and ~20% failure rate to test the retry logic.
@@ -446,6 +460,9 @@ All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka e
 
 - `transfer-requests` — async transfer commands from ListenerApi to transfer-api (via Debezium outbox)
 - `transfer-events` — transfer state changes from transfer-api to ListenerApi (via RabbitMQ bridge consumer)
+- `transfer-limits` — employee transfer limits published by transfer-api when custom limits change (compacted, keyed by employee ID)
+- `transfer-usage-by-period` — ksqlDB materialized: completed transfer count + total amount per employee per pay period
+- `transfer-usage-by-day` — ksqlDB materialized: completed transfer count per employee per day
 
 ### Key Files
 
@@ -455,7 +472,7 @@ All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka e
 - `src/PayrollService.Infrastructure/Messaging/CloudEventWrapper.cs` — wraps domain events in CloudEvent envelope
 - `src/PayrollService.Domain/Common/Entity.cs` — base entity with domain event collection
 - `src/ListenerApi/Program.cs` — GraphQL schema, MassTransit Kafka Rider consumers, migration runner
-- `src/ListenerApi/Consumers/` — Kafka Rider consumer classes (employee-events, employee-net-pay, transfer-events)
+- `src/ListenerApi/Consumers/` — Kafka Rider consumer classes (employee-events, employee-net-pay, transfer-events, transfer-limits)
 - `src/ListenerApi.Data/Entities/EmployeePayAttributes.cs` — net pay breakdown entity (1:1 with EmployeeRecord)
 - `ksqldb/statements.sql` — ksqlDB stream/table definitions for pay period aggregation
 - `scripts/seed.sh` — API-based seed script (runs as Docker container, exercises full event pipeline)
@@ -474,6 +491,9 @@ All 5 workflow steps are created upfront in `Transfer.Create()` so every Kafka e
 - `src/TransferService.Infrastructure/DependencyInjection.cs` — transfer infrastructure registration
 - `docker/Dockerfile.transferapi` — TransferService.Api Dockerfile
 - `src/ListenerApi.Data/Entities/OutboxMessage.cs` — Debezium outbox entity
+- `src/ListenerApi.Data/Entities/EmployeeTransferStatus.cs` — transfer status entity (canTransfer, limits, usage)
+- `src/TransferService.Api/Consumers/LimitsKafkaBridgeConsumer.cs` — RabbitMQ → Kafka bridge for limits events
+- `src/TransferService.Infrastructure/Messaging/LimitsEventPublisher.cs` — publishes employee limits to Kafka `transfer-limits`
 - `docs/transfer-outbox-options.md` — Comparison of outbox approaches (MySQL, MassTransit, Debezium)
 
 ## Known Issues

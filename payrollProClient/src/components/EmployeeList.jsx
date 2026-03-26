@@ -69,17 +69,19 @@ function PayDetailModal({ employee, transfers, onClose, onTransfer }) {
           <div className="pay-detail-label pay-detail-net-label">Net Pay</div>
           <div className="pay-detail-value pay-detail-net">{formatCurrency(pa.netPay)}</div>
 
-          {transferredAmount > 0 && (
+          {Number(pa.transferTotalAmount || 0) > 0 && (
             <>
-              <div className="pay-detail-label">Transfers</div>
-              <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(transferredAmount)}</div>
+              <div className="pay-detail-separator" />
+
+              <div className="pay-detail-label">Transfers (Period {pa.payPeriodNumber})</div>
+              <div className="pay-detail-value pay-detail-deduction">-{formatCurrency(pa.transferTotalAmount)}</div>
             </>
           )}
 
           <div className="pay-detail-separator" />
 
           <div className="pay-detail-label pay-detail-net-label">Available Balance</div>
-          <div className="pay-detail-value pay-detail-net">{formatCurrency(availableBalance)}</div>
+          <div className="pay-detail-value pay-detail-net">{formatCurrency(Number(pa.netPay) - Number(pa.transferTotalAmount || 0))}</div>
         </div>
         <div className="pay-detail-actions">
           <button className="btn btn-primary" onClick={onTransfer}>
@@ -340,7 +342,7 @@ export default function EmployeeList() {
                   <th>Email</th>
                   <th>Pay Type</th>
                   <th>Pay Rate</th>
-                  <th>Available</th>
+                  <th>Available Balance</th>
                   <th>Transfers</th>
                   <th>Status</th>
                   <th>Last Event</th>
@@ -369,14 +371,7 @@ export default function EmployeeList() {
                       onClick={() => employee.payAttributes && setSelectedEmployeeId(employee.id)}
                     >
                       {employee.payAttributes
-                        ? (() => {
-                            const netPay = Number(employee.payAttributes.netPay);
-                            const period = String(employee.payAttributes.payPeriodNumber);
-                            const transferred = (transferMap[employee.id] || [])
-                              .filter(t => t.status !== 'Failed' && String(t.payPeriodNumber) === period)
-                              .reduce((sum, t) => sum + Number(t.amount), 0);
-                            return `$${(netPay - transferred).toFixed(2)}`;
-                          })()
+                        ? `$${(Number(employee.payAttributes.netPay) - Number(employee.payAttributes.transferTotalAmount || 0)).toFixed(2)}`
                         : '\u2014'}
                     </td>
                     <td className="transfer-indicator-cell">

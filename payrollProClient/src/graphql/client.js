@@ -2,7 +2,7 @@ import { createClient, cacheExchange, fetchExchange, subscriptionExchange } from
 import { createClient as createWSClient } from 'graphql-ws';
 
 const wsClient = createWSClient({
-  url: 'ws://localhost:5001/graphql',
+  url: `ws://${window.location.host}/graphql`,
   retryAttempts: 10,
   shouldRetry: () => true,
   connectionParams: () => ({}),
@@ -15,7 +15,7 @@ const wsClient = createWSClient({
 });
 
 export const urqlClient = createClient({
-  url: 'http://localhost:5001/graphql',
+  url: '/graphql',
   exchanges: [
     cacheExchange,
     fetchExchange,

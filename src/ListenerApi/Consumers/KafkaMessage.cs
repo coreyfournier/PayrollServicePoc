@@ -23,6 +23,11 @@ public class NetPayEventMessage
     public string Value { get; set; } = string.Empty;
 }
 
+public class TransferLimitsMessage
+{
+    public string Value { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// Confluent.Kafka deserializer that reads raw bytes as a UTF-8 string
 /// and wraps them in a typed message for MassTransit routing.

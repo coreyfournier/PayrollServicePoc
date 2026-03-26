@@ -1,11 +1,13 @@
 import { useQuery, useSubscription } from 'urql';
 import { GET_TRANSFERS_BY_EMPLOYEE } from '../graphql/queries';
-import { TRANSFER_CHANGE_SUBSCRIPTION } from '../graphql/subscriptions';
+import { TRANSFER_CHANGE_SUBSCRIPTION, TRANSFER_STATUS_SUBSCRIPTION } from '../graphql/subscriptions';
 import { useState, useEffect, useCallback } from 'react';
 
 export default function TransferPanel({ employee, onClose, onBack }) {
   const pa = employee.payAttributes;
   const netPay = pa ? Number(pa.netPay) : 0;
+  const totalTransferred = pa ? Number(pa.transferTotalAmount || 0) : 0;
+  const availableBalance = netPay - totalTransferred;
   const payPeriod = pa?.payPeriodNumber ? String(pa.payPeriodNumber) : '';
 
   const [transfers, setTransfers] = useState([]);
@@ -29,6 +31,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
   });
 
   const [subResult] = useSubscription({ query: TRANSFER_CHANGE_SUBSCRIPTION });
+  const [statusSubResult] = useSubscription({ query: TRANSFER_STATUS_SUBSCRIPTION });
 
   // Seed transfers from query
   useEffect(() => {
@@ -53,6 +56,14 @@ export default function TransferPanel({ employee, onClose, onBack }) {
       return [incoming, ...prev];
     });
   }, [subResult.data, employee.id]);
+
+  // Update canTransfer from subscription
+  useEffect(() => {
+    if (!statusSubResult.data?.onTransferStatusChanged) return;
+    const { transferStatus } = statusSubResult.data.onTransferStatusChanged;
+    if (transferStatus.employeeId !== employee.id) return;
+    setCanTransfer(transferStatus.canTransfer);
+  }, [statusSubResult.data, employee.id]);
 
   // Fetch bank accounts via REST
   useEffect(() => {
@@ -169,6 +180,11 @@ export default function TransferPanel({ employee, onClose, onBack }) {
           <span className="transfer-balance-label">Available (Period {payPeriod})</span>
           <span className="transfer-balance-amount">{formatCurrency(availableBalance)}</span>
         </div>
+        {!canTransfer && (
+          <div className="transfer-error" style={{ marginTop: '8px' }}>
+            Transfer limit reached. You cannot initiate new transfers at this time.
+          </div>
+        )}
 
         {error && <div className="transfer-error">{error}</div>}
 
@@ -224,7 +240,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={submitting || bankAccounts.length === 0 || !payPeriod || (!selectedAmount && (!customAmount || parseFloat(customAmount) <= 0))}
+              disabled={submitting || !canTransfer || bankAccounts.length === 0 || !payPeriod || (!selectedAmount && (!customAmount || parseFloat(customAmount) <= 0))}
             >
               {submitting ? 'Submitting...' : 'Transfer'}
             </button>

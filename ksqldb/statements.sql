@@ -15,6 +15,11 @@
 -- ============================================================
 
 -- Current / new objects
+DROP TABLE IF EXISTS TRANSFER_USAGE_BY_DAY DELETE TOPIC;
+DROP TABLE IF EXISTS TRANSFER_USAGE_BY_PERIOD DELETE TOPIC;
+DROP STREAM IF EXISTS TRANSFER_COMPLETED DELETE TOPIC;
+DROP STREAM IF EXISTS TRANSFER_EVENTS_RAW;
+DROP TABLE IF EXISTS TRANSFER_LIMITS;
 DROP TABLE IF EXISTS EMPLOYEE_INFO DELETE TOPIC;
 DROP STREAM IF EXISTS EMPLOYEE_INFO_EVENTS DELETE TOPIC;
 DROP TABLE IF EXISTS EMPLOYEE_NET_PAY_BY_PERIOD;
@@ -144,5 +149,96 @@ CREATE SOURCE TABLE EMPLOYEE_NET_PAY_BY_PERIOD (
 ) WITH (
   KAFKA_TOPIC='employee-net-pay',
   KEY_FORMAT='JSON',
+  VALUE_FORMAT='JSON'
+);
+
+-- ============================================================
+-- Transfer usage aggregation
+-- Streams and tables for tracking completed transfer counts
+-- and amounts per employee per pay period and per day.
+-- ============================================================
+
+-- Stream from the raw transfer-events topic (CloudEvent envelope)
+-- The data field contains the full Transfer entity serialized by TransferEventPublisher.
+CREATE STREAM TRANSFER_EVENTS_RAW (
+  id VARCHAR,
+  source VARCHAR,
+  type VARCHAR,
+  data STRUCT<
+    Id VARCHAR,
+    EmployeeId VARCHAR,
+    Amount DOUBLE,
+    PayPeriodNumber BIGINT,
+    Status VARCHAR,
+    InitiatedAt VARCHAR,
+    CompletedAt VARCHAR,
+    BankAccountId VARCHAR,
+    FailureReason VARCHAR,
+    ExternalReferenceId VARCHAR,
+    CurrentBalance DOUBLE,
+    DomainEvents ARRAY<STRUCT<EventId VARCHAR, OccurredOn VARCHAR, EventType VARCHAR>>
+  >
+) WITH (
+  KAFKA_TOPIC='transfer-events',
+  VALUE_FORMAT='JSON'
+);
+
+-- Stream: filter for completed transfers only
+CREATE STREAM TRANSFER_COMPLETED AS
+  SELECT
+    data->EmployeeId AS EMPLOYEE_ID,
+    data->Amount AS AMOUNT,
+    data->PayPeriodNumber AS PAY_PERIOD_NUMBER,
+    data->InitiatedAt AS INITIATED_AT,
+    SUBSTRING(data->InitiatedAt, 1, 10) AS INITIATED_DATE,
+    data->Id AS TRANSFER_ID
+  FROM TRANSFER_EVENTS_RAW
+  WHERE data->Status = 'Completed'
+  EMIT CHANGES;
+
+-- Table: transfer usage per employee per pay period
+-- Aggregates count and total amount of completed transfers
+CREATE TABLE TRANSFER_USAGE_BY_PERIOD WITH (
+  KAFKA_TOPIC='transfer-usage-by-period',
+  KEY_FORMAT='JSON',
+  VALUE_FORMAT='JSON'
+) AS
+  SELECT
+    EMPLOYEE_ID,
+    PAY_PERIOD_NUMBER,
+    COUNT(*) AS TRANSFER_COUNT,
+    SUM(AMOUNT) AS TOTAL_AMOUNT
+  FROM TRANSFER_COMPLETED
+  GROUP BY EMPLOYEE_ID, PAY_PERIOD_NUMBER
+  EMIT CHANGES;
+
+-- Table: transfer usage per employee per day (based on InitiatedAt date)
+-- Aggregates daily count of completed transfers
+CREATE TABLE TRANSFER_USAGE_BY_DAY WITH (
+  KAFKA_TOPIC='transfer-usage-by-day',
+  KEY_FORMAT='JSON',
+  VALUE_FORMAT='JSON'
+) AS
+  SELECT
+    EMPLOYEE_ID,
+    INITIATED_DATE,
+    COUNT(*) AS TRANSFER_COUNT
+  FROM TRANSFER_COMPLETED
+  GROUP BY EMPLOYEE_ID, INITIATED_DATE
+  EMIT CHANGES;
+
+-- ============================================================
+-- Source table: employee transfer limits (latest per employee)
+-- Backed by the compacted transfer-limits topic published by transfer-api.
+-- Queryable via pull query:
+--   SELECT * FROM TRANSFER_LIMITS WHERE EMPLOYEE_ID = '...';
+-- ============================================================
+CREATE SOURCE TABLE TRANSFER_LIMITS (
+  EMPLOYEE_ID VARCHAR PRIMARY KEY,
+  MAX_PER_PAY_PERIOD INTEGER,
+  MAX_AMOUNT_PER_PAY_PERIOD DOUBLE,
+  MAX_PER_DAY INTEGER
+) WITH (
+  KAFKA_TOPIC='transfer-limits',
   VALUE_FORMAT='JSON'
 );

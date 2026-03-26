@@ -195,6 +195,7 @@ kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-requests
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-events
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-limits --config cleanup.policy=compact
 
 # Purge non-compacted topics via kafka-delete-records (3 partitions each)
 PURGE_TOPICS="employee-events timeentry-events taxinfo-events deduction-events transfer-requests transfer-events"
@@ -214,6 +215,7 @@ log "  Purged non-compacted topics"
 # before seed runs; deleting ensures it gets recreated with the correct 3 partitions.
 kafka-topics --delete --topic employee-net-pay --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 kafka-topics --delete --topic employee-info --bootstrap-server $BOOTSTRAP 2>/dev/null || true
+kafka-topics --delete --topic transfer-limits --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 sleep 2
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
@@ -392,15 +394,9 @@ sleep 2
 
 # ── Bank accounts ────────────────────────────────────────────────────────
 
-log "Waiting for Transfer API..."
-until curl -sf "http://transfer-api:80/api/bankaccounts/employee/00000000-0000-0000-0000-000000000000" > /dev/null 2>&1; do
-  sleep 2
-done
-log "  Transfer API is ready."
-
 log "Creating bank accounts..."
 
-BA1=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA1=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP1_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"1234\",
@@ -410,7 +406,7 @@ BA1=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA1_ID=$(echo "$BA1" | jq -r '.id')
 log "  John Smith — Chase Bank ****1234 — $BA1_ID"
 
-BA2=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA2=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP2_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"5678\",
@@ -420,7 +416,7 @@ BA2=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA2_ID=$(echo "$BA2" | jq -r '.id')
 log "  Sarah Johnson — Chase Bank ****5678 — $BA2_ID"
 
-BA3=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA3=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP3_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"9012\",
@@ -430,7 +426,7 @@ BA3=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA3_ID=$(echo "$BA3" | jq -r '.id')
 log "  Michael Williams — Chase Bank ****9012 — $BA3_ID"
 
-BA4=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA4=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP4_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"3456\",
@@ -440,7 +436,7 @@ BA4=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 BA4_ID=$(echo "$BA4" | jq -r '.id')
 log "  Emily Brown — Chase Bank ****3456 — $BA4_ID"
 
-BA5=$(api_post "$TRANSFER_API/bankaccounts" -d "{
+BA5=$(api_post "$LISTENER/api/bankaccounts" -d "{
   \"employeeId\": \"$EMP5_ID\",
   \"bankName\": \"Chase Bank\",
   \"accountNumberMasked\": \"7890\",
@@ -449,6 +445,16 @@ BA5=$(api_post "$TRANSFER_API/bankaccounts" -d "{
 }")
 BA5_ID=$(echo "$BA5" | jq -r '.id')
 log "  David Davis — Chase Bank ****7890 — $BA5_ID"
+
+# ── Publish default transfer limits for each employee ────────────────────
+
+log "Publishing default transfer limits..."
+for EMP_ID in $EMP1_ID $EMP2_ID $EMP3_ID $EMP4_ID $EMP5_ID; do
+  echo "${EMP_ID}:{\"EMPLOYEE_ID\":\"${EMP_ID}\",\"MAX_PER_PAY_PERIOD\":5,\"MAX_AMOUNT_PER_PAY_PERIOD\":10000.0,\"MAX_PER_DAY\":1}" | \
+    kafka-console-producer --bootstrap-server $BOOTSTRAP --topic transfer-limits \
+      --property "parse.key=true" --property "key.separator=:" 2>/dev/null
+done
+log "  Published default limits for 5 employees"
 
 # ── Time entries (hourly employees only) ─────────────────────────────────
 

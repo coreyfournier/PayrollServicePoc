@@ -12,6 +12,8 @@ public class ListenerDbContext : Microsoft.EntityFrameworkCore.DbContext
     public DbSet<EmployeePayAttributes> EmployeePayAttributes { get; set; } = null!;
     public DbSet<TransferRecord> TransferRecords { get; set; } = null!;
     public DbSet<OutboxMessage> OutboxMessages { get; set; } = null!;
+    public DbSet<EmployeeTransferStatus> EmployeeTransferStatuses { get; set; } = null!;
+    public DbSet<BankAccount> BankAccounts { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -81,6 +83,30 @@ public class ListenerDbContext : Microsoft.EntityFrameworkCore.DbContext
             entity.Property(e => e.Topic).IsRequired().HasMaxLength(255);
             entity.Property(e => e.Payload).IsRequired().HasColumnType("json");
             entity.HasIndex(e => e.CreatedAt);
+        });
+
+        modelBuilder.Entity<BankAccount>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasOne(e => e.Employee)
+                  .WithMany()
+                  .HasForeignKey(e => e.EmployeeId)
+                  .OnDelete(DeleteBehavior.NoAction);
+            entity.Property(e => e.BankName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.AccountNumberMasked).IsRequired().HasMaxLength(10);
+            entity.Property(e => e.RoutingNumber).IsRequired().HasMaxLength(20);
+            entity.HasIndex(e => e.EmployeeId);
+        });
+
+        modelBuilder.Entity<EmployeeTransferStatus>(entity =>
+        {
+            entity.HasKey(e => e.EmployeeId);
+            entity.HasOne(e => e.Employee)
+                  .WithOne()
+                  .HasForeignKey<EmployeeTransferStatus>(e => e.EmployeeId)
+                  .OnDelete(DeleteBehavior.NoAction);
+            entity.Property(e => e.TotalAmountTransferred).HasPrecision(18, 2);
+            entity.Property(e => e.PeriodAmountLimit).HasPrecision(18, 2);
         });
     }
 }

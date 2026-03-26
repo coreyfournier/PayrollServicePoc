@@ -20,4 +20,9 @@ public class TransferQuery
             .Where(t => t.EmployeeId == employeeId)
             .OrderByDescending(t => t.InitiatedAt)
             .ToListAsync();
+
+    public async Task<EmployeeTransferStatus?> GetTransferStatus(
+        Guid employeeId,
+        [Service] ListenerDbContext context)
+        => await context.EmployeeTransferStatuses.FindAsync(employeeId);
 }

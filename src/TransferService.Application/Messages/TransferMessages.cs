@@ -26,3 +26,6 @@ public record BankTransferCompleted(Guid TransferId, bool Success, string? Exter
 
 // Saga → Kafka bridge event (saga publishes to RabbitMQ, bridge consumer forwards to Kafka)
 public record TransferUpdated(Guid TransferId);
+
+// Limits → Kafka bridge event (published after custom limits CRUD, bridge consumer forwards to Kafka)
+public record EmployeeLimitsUpdated(Guid EmployeeId);

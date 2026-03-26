@@ -16,7 +16,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/api/bankaccounts': {
-        target: 'http://localhost:5002',
+        target: 'http://localhost:5001',
         changeOrigin: true,
       },
       '/api': {

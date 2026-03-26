@@ -66,6 +66,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<RunFraudCheckConsumer>();
     x.AddConsumer<RunBankTransferConsumer>();
     x.AddConsumer<TransferKafkaBridgeConsumer>();
+    x.AddConsumer<LimitsKafkaBridgeConsumer>();
 
     x.AddSagaStateMachine<TransferStateMachine, TransferState>()
         .MongoDbRepository(r =>
