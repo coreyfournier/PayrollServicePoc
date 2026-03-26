@@ -30,7 +30,11 @@ public class DeductionRepository : IDeductionRepository
 
     public async Task<Deduction> AddAsync(Deduction deduction, CancellationToken cancellationToken = default)
     {
-        await _context.Deductions.InsertOneAsync(deduction, cancellationToken: cancellationToken);
+        await _context.Deductions.ReplaceOneAsync(
+            d => d.Id == deduction.Id,
+            deduction,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken);
         return deduction;
     }
 

@@ -108,6 +108,7 @@ builder.Services.AddMassTransit(x =>
 
             k.TopicEndpoint<string, TransferRequestMessage>("transfer-requests", "transfer-service-group", e =>
             {
+                e.AutoOffsetReset = Confluent.Kafka.AutoOffsetReset.Earliest;
                 e.SetKeyDeserializer(Confluent.Kafka.Deserializers.Utf8);
                 e.SetValueDeserializer(new RawStringDeserializer<TransferRequestMessage>(
                     (msg, val) => msg.Value = val));

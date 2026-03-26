@@ -38,7 +38,11 @@ public class TimeEntryRepository : ITimeEntryRepository
 
     public async Task<TimeEntry> AddAsync(TimeEntry timeEntry, CancellationToken cancellationToken = default)
     {
-        await _context.TimeEntries.InsertOneAsync(timeEntry, cancellationToken: cancellationToken);
+        await _context.TimeEntries.ReplaceOneAsync(
+            t => t.Id == timeEntry.Id,
+            timeEntry,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken);
         return timeEntry;
     }
 

@@ -11,6 +11,11 @@ export default function TransferPanel({ employee, onClose, onBack }) {
   const payPeriod = pa?.payPeriodNumber ? String(pa.payPeriodNumber) : '';
 
   const [transfers, setTransfers] = useState([]);
+
+  const transferredAmount = transfers
+    .filter(t => t.status !== 'Failed' && String(t.payPeriodNumber) === payPeriod)
+    .reduce((sum, t) => sum + Number(t.amount), 0);
+  const availableBalance = netPay - transferredAmount;
   const [bankAccounts, setBankAccounts] = useState([]);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -18,7 +23,6 @@ export default function TransferPanel({ employee, onClose, onBack }) {
   const [form, setForm] = useState({ bankAccountId: '' });
   const [selectedAmount, setSelectedAmount] = useState(null);
   const [customAmount, setCustomAmount] = useState('');
-  const [canTransfer, setCanTransfer] = useState(true);
   const presetAmounts = [50, 100, 150].filter(a => a <= availableBalance);
 
   const [transferResult] = useQuery({
@@ -173,7 +177,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
         </div>
 
         <div className="transfer-balance-summary">
-          <span className="transfer-balance-label">Available Balance (Period {payPeriod})</span>
+          <span className="transfer-balance-label">Available (Period {payPeriod})</span>
           <span className="transfer-balance-amount">{formatCurrency(availableBalance)}</span>
         </div>
         {!canTransfer && (

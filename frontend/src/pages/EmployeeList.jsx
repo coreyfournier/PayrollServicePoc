@@ -5,6 +5,8 @@ import { getEmployees, createEmployee, updateEmployee, deleteEmployee } from '..
 import { format } from 'date-fns';
 import SearchPanel from '../components/search/SearchPanel';
 
+const SEARCH_ENABLED = import.meta.env.VITE_ENABLE_SEARCH === 'true';
+
 const PAY_TYPES = { 1: 'Hourly', 2: 'Salary' };
 
 function EmployeeList() {
@@ -180,7 +182,7 @@ function EmployeeList() {
 
       <div className="card">
         <div className="card-body">
-          <SearchPanel onSearch={handleSearchResults} onReset={handleSearchReset} />
+          {SEARCH_ENABLED && <SearchPanel onSearch={handleSearchResults} onReset={handleSearchReset} />}
         </div>
         <div className="table-container">
           <table className="table">

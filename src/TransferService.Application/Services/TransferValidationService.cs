@@ -47,7 +47,7 @@ public class TransferValidationService : ITransferValidationService
         var currentAmount = completedTransfers.Sum(t => t.Amount);
 
         var transfersToday = await _transferRepository.GetCountByEmployeeAndDateAsync(
-            request.EmployeeId, DateTime.UtcNow.Date, cancellationToken);
+            request.EmployeeId, DateTime.UtcNow.Date, request.TransferId, cancellationToken);
 
         var employeeOverride = await _limitsRepository.GetByEmployeeIdAsync(request.EmployeeId);
         var limits = employeeOverride != null

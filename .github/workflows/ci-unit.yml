@@ -1,10 +1,16 @@
-name: CI
+name: CI - Unit Tests
 
 on:
   pull_request:
     branches: [master]
   push:
     branches: [master]
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+  pull-requests: write
 
 jobs:
   dotnet:
@@ -31,6 +37,12 @@ jobs:
 
       - name: Unit Tests - TransferService
         run: dotnet test tests/TransferService.UnitTests/ --no-build --logger "trx;LogFileName=transfer-results.trx"
+
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: '**/TestResults/*.trx'
 
   frontend:
     name: Frontend Build & Test

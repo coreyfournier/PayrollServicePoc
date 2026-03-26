@@ -1,0 +1,103 @@
+# docker-compose.kafka-test.yml
+# Minimal Kafka stack for pipeline tests (no databases, no APIs, no Elasticsearch)
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: test-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - test-network
+    healthcheck:
+      test: echo srvr | nc localhost 2181 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: test-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - test-network
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: test-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command: |
+      "
+      echo 'Creating Kafka topics...'
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic employee-events --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic employee-net-pay --partitions 3 --replication-factor 1 --config cleanup.policy=compact
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic employee-info --partitions 3 --replication-factor 1 --config cleanup.policy=compact
+      echo 'Topics created.'
+      "
+    networks:
+      - test-network
+
+  ksqldb-server:
+    image: confluentinc/cp-ksqldb-server:7.7.1
+    container_name: test-ksqldb-server
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_BOOTSTRAP_SERVERS: kafka:9092
+      KSQL_LISTENERS: http://0.0.0.0:8088/
+      KSQL_KSQL_SERVICE_ID: test_ksqldb_
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_NAME: KSQL_PROCESSING_LOG
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - test-network
+    healthcheck:
+      test: curl -sf http://localhost:8088/info || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+  net-pay-processor:
+    build:
+      context: ./src/NetPayProcessor
+      dockerfile: Dockerfile
+    container_name: test-net-pay-processor
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      APPLICATION_ID: test-net-pay-processor
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge

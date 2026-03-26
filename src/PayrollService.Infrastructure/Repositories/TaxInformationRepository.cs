@@ -30,7 +30,11 @@ public class TaxInformationRepository : ITaxInformationRepository
 
     public async Task<TaxInformation> AddAsync(TaxInformation taxInformation, CancellationToken cancellationToken = default)
     {
-        await _context.TaxInformation.InsertOneAsync(taxInformation, cancellationToken: cancellationToken);
+        await _context.TaxInformation.ReplaceOneAsync(
+            t => t.Id == taxInformation.Id,
+            taxInformation,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken);
         return taxInformation;
     }
 

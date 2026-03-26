@@ -4,12 +4,17 @@ import { EMPLOYEE_CHANGE_SUBSCRIPTION, TRANSFER_CHANGE_SUBSCRIPTION } from '../g
 import { useState, useEffect, useRef, useCallback } from 'react';
 import TransferPanel from './TransferPanel';
 
-function PayDetailModal({ employee, onClose, onTransfer }) {
+function PayDetailModal({ employee, transfers, onClose, onTransfer }) {
   const pa = employee.payAttributes;
   if (!pa) return null;
 
   const formatCurrency = (val) => `$${Number(val).toFixed(2)}`;
   const payTypeLabel = pa.payType === '2' || pa.payType === 'Salary' ? 'Salary' : 'Hourly';
+  const period = String(pa.payPeriodNumber);
+  const transferredAmount = (transfers || [])
+    .filter(t => t.status !== 'Failed' && String(t.payPeriodNumber) === period)
+    .reduce((sum, t) => sum + Number(t.amount), 0);
+  const availableBalance = Number(pa.netPay) - transferredAmount;
 
   return (
     <div className="confirm-modal-overlay" onClick={onClose}>
@@ -296,6 +301,7 @@ export default function EmployeeList() {
       {selectedEmployee && view === 'pay' && (
         <PayDetailModal
           employee={selectedEmployee}
+          transfers={transferMap[selectedEmployeeId] || []}
           onClose={() => { setSelectedEmployeeId(null); setView('pay'); }}
           onTransfer={() => { setTransferFromPay(true); setView('transfer'); }}
         />

@@ -80,6 +80,10 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                     catch (DuplicateInProgressTransferException)
                     {
                         ctx.Saga.FailureReason = "A transfer is already in progress for this employee.";
+                        var publisher = scope.ServiceProvider.GetRequiredService<ITransferEventPublisher>();
+                        await publisher.PublishRejectionAsync(
+                            ctx.Saga.CorrelationId, ctx.Saga.EmployeeId, ctx.Saga.Amount,
+                            ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId, ctx.Saga.FailureReason);
                     }
                 })
                 // Step 2: Simulate validation delay
