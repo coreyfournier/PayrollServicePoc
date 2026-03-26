@@ -54,4 +54,51 @@ public class TransferEventPublisher : ITransferEventPublisher
             throw;
         }
     }
+
+    public async Task PublishRejectionAsync(Guid transferId, Guid employeeId, decimal amount, long payPeriodNumber,
+        Guid bankAccountId, string failureReason, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            var rejection = new
+            {
+                Id = transferId,
+                EmployeeId = employeeId,
+                Amount = amount,
+                PayPeriodNumber = payPeriodNumber,
+                Status = "Failed",
+                BankAccountId = bankAccountId,
+                InitiatedAt = now,
+                CompletedAt = (DateTime?)null,
+                FailureReason = failureReason,
+                ExternalReferenceId = (string?)null,
+                CurrentBalance = (decimal?)null,
+                WorkflowSteps = Array.Empty<object>(),
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+
+            var jsonElement = JsonSerializer.SerializeToElement(rejection, JsonOptions);
+            var cloudEvent = CloudEventWrapper.Create(jsonElement);
+            var messageValue = JsonSerializer.Serialize(cloudEvent, JsonOptions);
+
+            var message = new Message<string, string>
+            {
+                Key = transferId.ToString(),
+                Value = messageValue
+            };
+
+            var result = await _producer.ProduceAsync(TopicName, message, cancellationToken);
+
+            _logger.LogInformation(
+                "Published transfer rejection for {TransferId} to partition {Partition}: {Reason}",
+                transferId, result.Partition.Value, failureReason);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to publish transfer rejection for {TransferId}", transferId);
+            throw;
+        }
+    }
 }
