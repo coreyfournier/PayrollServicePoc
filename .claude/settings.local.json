@@ -23,7 +23,8 @@
       "Bash(cd:*)",
       "Bash(find:*)",
       "Bash(dotnet ef:*)",
-      "Bash(dotnet test:*)"
+      "Bash(dotnet test:*)",
+      "Bash(docker-compose logs:*)"
     ]
   }
 }

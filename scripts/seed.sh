@@ -219,10 +219,11 @@ kafka-topics --delete --topic transfer-limits --bootstrap-server $BOOTSTRAP 2>/d
 sleep 2
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-net-pay --config cleanup.policy=compact,delete
 kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic employee-info --config cleanup.policy=compact
-log "  Recreated compacted topics (employee-net-pay, employee-info)"
+kafka-topics --create --if-not-exists --bootstrap-server $BOOTSTRAP --partitions 3 --replication-factor 1 --topic transfer-limits --config cleanup.policy=compact
+log "  Recreated compacted topics (employee-net-pay, employee-info, transfer-limits)"
 
 # Fix partition count for any topics that were auto-created with 1 partition by consumers
-ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events employee-net-pay employee-info transfer-requests transfer-events"
+ALL_TOPICS="employee-events timeentry-events taxinfo-events deduction-events employee-net-pay employee-info transfer-requests transfer-events transfer-limits"
 for topic in $ALL_TOPICS; do
   kafka-topics --alter --topic $topic --partitions 3 --bootstrap-server $BOOTSTRAP 2>/dev/null || true
 done
@@ -389,8 +390,17 @@ EMP5=$(api_post "$API/employees" -d '{
 EMP5_ID=$(echo "$EMP5" | jq -r '.id')
 log "  Created David Davis (Salary, 32h) — $EMP5_ID"
 
-# Small pause to let outbox flush employee events before time entries
-sleep 2
+# Wait for all employees to be materialized in listener-api MySQL
+# (employee-events must propagate through Kafka → listener-api consumer → MySQL)
+log "Waiting for employees to appear in Listener API before creating bank accounts..."
+EXPECTED_COUNT=5
+until [ "$(curl -sf "$LISTENER/graphql" \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "{ employees { id } }"}' 2>/dev/null | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d.get('data',{}).get('employees',[])))" 2>/dev/null)" -ge "$EXPECTED_COUNT" ] 2>/dev/null; do
+  sleep 2
+done
+log "  All employees materialized in Listener API."
 
 # ── Bank accounts ────────────────────────────────────────────────────────
 

@@ -578,6 +578,7 @@ services:
         condition: service_healthy
       kafka-connect:
         condition: service_healthy
+    user: "0"
     volumes:
       - ./scripts/seed.sh:/seed.sh
       - ./ksqldb/statements.sql:/statements.sql
