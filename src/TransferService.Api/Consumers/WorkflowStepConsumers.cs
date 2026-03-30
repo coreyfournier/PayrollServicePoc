@@ -27,9 +27,10 @@ public class RunBalanceCheckConsumer : IConsumer<RunBalanceCheck>
         await Task.Delay(Random.Shared.Next(1000, 5000));
 
         var balance = await _balanceService.GetCurrentBalanceAsync(msg.EmployeeId, msg.PayPeriodNumber);
-        var sufficient = balance == null || balance.NetPay >= msg.Amount;
+        var available = balance?.AvailableBalance ?? 0;
+        var sufficient = balance == null || available >= msg.Amount;
 
-        var result = new BalanceCheckCompleted(msg.TransferId, sufficient, balance?.NetPay ?? 0);
+        var result = new BalanceCheckCompleted(msg.TransferId, sufficient, available);
         await context.Publish(result);
     }
 }

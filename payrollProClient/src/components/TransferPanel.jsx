@@ -6,8 +6,6 @@ import { useState, useEffect, useCallback } from 'react';
 export default function TransferPanel({ employee, onClose, onBack }) {
   const pa = employee.payAttributes;
   const netPay = pa ? Number(pa.netPay) : 0;
-  const totalTransferred = pa ? Number(pa.transferTotalAmount || 0) : 0;
-  const availableBalance = netPay - totalTransferred;
   const payPeriod = pa?.payPeriodNumber ? String(pa.payPeriodNumber) : '';
 
   const [transfers, setTransfers] = useState([]);
