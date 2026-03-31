@@ -15,6 +15,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
     .reduce((sum, t) => sum + Number(t.amount), 0);
   const availableBalance = netPay - transferredAmount;
   const [canTransfer, setCanTransfer] = useState(true);
+  const [transferLimits, setTransferLimits] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -62,6 +63,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
     const { transferStatus } = statusSubResult.data.onTransferStatusChanged;
     if (transferStatus.employeeId !== employee.id) return;
     setCanTransfer(transferStatus.canTransfer);
+    setTransferLimits(transferStatus);
   }, [statusSubResult.data, employee.id]);
 
   // Fetch bank accounts via REST
@@ -179,9 +181,23 @@ export default function TransferPanel({ employee, onClose, onBack }) {
           <span className="transfer-balance-label">Available (Period {payPeriod})</span>
           <span className="transfer-balance-amount">{formatCurrency(availableBalance)}</span>
         </div>
-        {!canTransfer && (
-          <div className="transfer-error" style={{ marginTop: '8px' }}>
-            Transfer limit reached. You cannot initiate new transfers at this time.
+        {!canTransfer && transferLimits && (
+          <div className="transfer-limit-details" style={{ marginTop: '8px' }}>
+            {transferLimits.periodCountLimitReached && (
+              <div className="transfer-limit-item">
+                Pay period transfer limit reached ({transferLimits.transferCount}/{transferLimits.periodTransferLimit} transfers)
+              </div>
+            )}
+            {transferLimits.periodAmountLimitReached && (
+              <div className="transfer-limit-item">
+                Pay period amount limit reached ({formatCurrency(transferLimits.totalAmountTransferred)} of {formatCurrency(transferLimits.periodAmountLimit)})
+              </div>
+            )}
+            {transferLimits.dailyLimitReached && (
+              <div className="transfer-limit-item">
+                Daily transfer limit reached ({transferLimits.dailyTransferCount}/{transferLimits.dailyTransferLimit} today)
+              </div>
+            )}
           </div>
         )}
 
