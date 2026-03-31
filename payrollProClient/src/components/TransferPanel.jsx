@@ -14,6 +14,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
     .filter(t => t.status !== 'Failed' && String(t.payPeriodNumber) === payPeriod)
     .reduce((sum, t) => sum + Number(t.amount), 0);
   const availableBalance = netPay - transferredAmount;
+  const [canTransfer, setCanTransfer] = useState(true);
   const [bankAccounts, setBankAccounts] = useState([]);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [submitting, setSubmitting] = useState(false);
