@@ -15,7 +15,6 @@ public class DependencyInjectionTests
 
     [Theory]
     [InlineData(typeof(ITransferRepository))]
-    [InlineData(typeof(IBankAccountRepository))]
     [InlineData(typeof(IEmployeeTransferLimitsRepository))]
     [InlineData(typeof(IUnitOfWork))]
     [InlineData(typeof(IBankTransferService))]

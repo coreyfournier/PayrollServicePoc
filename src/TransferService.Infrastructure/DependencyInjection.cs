@@ -19,7 +19,6 @@ public static class DependencyInjection
         services.AddSingleton(sp => new TransferMongoDbContext(connectionString, databaseName));
 
         services.AddScoped<ITransferRepository, TransferRepository>();
-        services.AddScoped<IBankAccountRepository, BankAccountRepository>();
         services.AddScoped<IEmployeeTransferLimitsRepository, EmployeeTransferLimitsRepository>();
         services.AddScoped<IUnitOfWork, MassTransitUnitOfWork>();
         services.AddScoped<IBankTransferService, SimulatedBankService>();

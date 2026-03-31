@@ -4,7 +4,6 @@ using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using TransferService.Api.Consumers;
 using TransferService.Api.Sagas;
-using TransferService.Application.Commands.BankAccount;
 using TransferService.Application.Options;
 using TransferService.Infrastructure;
 using TransferService.Infrastructure.Persistence;
@@ -28,7 +27,7 @@ builder.Services.AddSwaggerGen(c =>
     c.SwaggerDoc("v1", new() { Title = "Transfer Service API", Version = "v1" });
 });
 
-builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(CreateBankAccountCommand).Assembly));
+builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(TransferLimitsOptions).Assembly));
 
 builder.Services.Configure<TransferLimitsOptions>(
     builder.Configuration.GetSection(TransferLimitsOptions.SectionName));
