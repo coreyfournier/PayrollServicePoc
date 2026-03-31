@@ -13,6 +13,7 @@ public class TransferController : ControllerBase
     private readonly ITransferRecordRepository _transferRepository;
     private readonly IEmployeeRecordRepository _employeeRepository;
     private readonly IBankAccountRepository _bankAccountRepository;
+    private readonly IEmployeeTransferStatusRepository _transferStatusRepository;
     private readonly ListenerDbContext _dbContext;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<TransferController> _logger;
@@ -24,6 +25,7 @@ public class TransferController : ControllerBase
         ITransferRecordRepository transferRepository,
         IEmployeeRecordRepository employeeRepository,
         IBankAccountRepository bankAccountRepository,
+        IEmployeeTransferStatusRepository transferStatusRepository,
         ListenerDbContext dbContext,
         IHttpClientFactory httpClientFactory,
         ILogger<TransferController> logger)
@@ -31,10 +33,12 @@ public class TransferController : ControllerBase
         _transferRepository = transferRepository;
         _employeeRepository = employeeRepository;
         _bankAccountRepository = bankAccountRepository;
+        _transferStatusRepository = transferStatusRepository;
         _dbContext = dbContext;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
+
 
     /// <summary>
     /// Initiates a transfer request. First attempts to validate rules against TransferService
@@ -57,6 +61,12 @@ public class TransferController : ControllerBase
             return BadRequest("Bank account not found or inactive.");
         if (bankAccount.EmployeeId != request.EmployeeId)
             return BadRequest("Bank account does not belong to this employee.");
+
+        // Quick gate: if we already know limits are exceeded from materialized Kafka data, reject immediately.
+        // No row = no limit data yet (e.g., transfer-api never published) → allow through.
+        var transferStatus = await _transferStatusRepository.GetByEmployeeIdAsync(request.EmployeeId);
+        if (transferStatus is { CanTransfer: false })
+            return BadRequest("Transfer limit reached.");
 
         // Attempt authoritative validation from TransferService (single source of truth for rules).
         // If TransferService is down or slow, fall through to the outbox path — the actor will
