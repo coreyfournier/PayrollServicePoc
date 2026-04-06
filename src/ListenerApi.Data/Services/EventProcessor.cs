@@ -102,6 +102,11 @@ public class EventProcessor
             _logger.LogInformation("Updated employee record {EmployeeId}", record.Id);
         }
 
+        // Load pay attributes so the subscription payload includes them
+        var payAttributes = await _payAttributesRepository.GetByEmployeeIdAsync(record.Id);
+        if (payAttributes != null)
+            record.PayAttributes = payAttributes;
+
         // Notify GraphQL subscribers
         await _subscriptionPublisher.PublishEmployeeChangeAsync(record, eventType);
     }
@@ -126,6 +131,12 @@ public class EventProcessor
             return;
         }
 
+        // Preserve transfer summary from existing record when same pay period
+        var transferCount = existing != null && existing.PayPeriodNumber == eventData.PayPeriodNumber
+            ? existing.TransferCount : 0;
+        var transferTotalAmount = existing != null && existing.PayPeriodNumber == eventData.PayPeriodNumber
+            ? existing.TransferTotalAmount : 0m;
+
         var payAttributes = new Entities.EmployeePayAttributes
         {
             EmployeeId = employeeId,
@@ -145,6 +156,8 @@ public class EventProcessor
             TotalHoursWorked = (decimal)eventData.TotalHoursWorked,
             PayPeriodStart = eventData.PayPeriodStart ?? string.Empty,
             PayPeriodEnd = eventData.PayPeriodEnd ?? string.Empty,
+            TransferCount = transferCount,
+            TransferTotalAmount = transferTotalAmount,
             UpdatedAt = DateTime.UtcNow
         };
 
@@ -230,11 +243,8 @@ public class EventProcessor
             await _transferRecordRepository.AddAsync(record);
         }
 
-        // Update pay attributes transfer summary on completion
-        if (newStatus == "Completed")
-        {
-            await UpdateTransferSummaryAsync(employeeId, eventData.PayPeriodNumber);
-        }
+        // Update pay attributes transfer summary on every status change
+        await UpdateTransferSummaryAsync(employeeId, eventData.PayPeriodNumber);
 
         // Notify GraphQL subscribers
         var transferRecord = await _transferRecordRepository.GetByIdAsync(transferId);
@@ -246,14 +256,14 @@ public class EventProcessor
 
     private async Task UpdateTransferSummaryAsync(Guid employeeId, long payPeriodNumber)
     {
-        var completedTransfers = await _transferRecordRepository.GetByEmployeeAndPayPeriodAsync(employeeId, payPeriodNumber);
-        var completed = completedTransfers.Where(t => t.Status == "Completed").ToList();
+        var allTransfers = await _transferRecordRepository.GetByEmployeeAndPayPeriodAsync(employeeId, payPeriodNumber);
+        var activeTransfers = allTransfers.Where(t => t.Status != "Failed").ToList();
 
         var payAttributes = await _payAttributesRepository.GetByEmployeeIdAsync(employeeId);
         if (payAttributes != null && payAttributes.PayPeriodNumber == payPeriodNumber)
         {
-            payAttributes.TransferCount = completed.Count;
-            payAttributes.TransferTotalAmount = completed.Sum(t => t.Amount);
+            payAttributes.TransferCount = activeTransfers.Count;
+            payAttributes.TransferTotalAmount = activeTransfers.Sum(t => t.Amount);
             payAttributes.UpdatedAt = DateTime.UtcNow;
             await _payAttributesRepository.UpsertAsync(payAttributes);
 

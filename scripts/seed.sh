@@ -128,7 +128,7 @@ conn = mysql.connector.connect(
     user='listener_user', password='listener_password'
 )
 cursor = conn.cursor()
-for table in ['OutboxMessages', 'TransferRecords', 'EmployeePayAttributes', 'EmployeeTransferStatuses', 'EmployeeRecords']:
+for table in ['OutboxMessages', 'TransferRecords', 'BankAccounts', 'EmployeePayAttributes', 'EmployeeTransferStatuses', 'EmployeeRecords']:
     try:
         cursor.execute(f'DELETE FROM {table}')
         conn.commit()

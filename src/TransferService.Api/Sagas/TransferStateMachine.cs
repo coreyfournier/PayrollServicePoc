@@ -195,7 +195,9 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                     var transfer = await repo.GetByIdAsync(ctx.Saga.CorrelationId);
                     if (transfer != null)
                     {
-                        transfer.CompleteWorkflowStep(WorkflowStep.Names.AwaitingConfirmation, "Accepted by user");
+                        transfer.AdjustAmountToBalance();
+                        transfer.CompleteWorkflowStep(WorkflowStep.Names.AwaitingConfirmation,
+                            $"Accepted by user — amount adjusted to ${transfer.Amount:F2}");
                         transfer.StartWorkflowStep(WorkflowStep.Names.FraudCheck);
                         transfer.MarkProcessing();
                         await repo.UpdateAsync(transfer);
@@ -264,7 +266,7 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                     }
                 })
                 .PublishAsync(ctx => Task.FromResult(
-                    new RunBankTransfer(ctx.Saga.CorrelationId, ctx.Saga.Amount, ctx.Saga.BankAccountId)))
+                    new RunBankTransfer(ctx.Saga.CorrelationId, ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId)))
         );
 
         // ── Transferring: result arrives from RunBankTransferConsumer ──
@@ -329,7 +331,7 @@ public class TransferStateMachine : MassTransitStateMachine<TransferState>
                         ctx.Init<RetryBankTransfer>(new RetryBankTransfer(ctx.Saga.CorrelationId)))),
             When(BankTransferRetry.Received)
                 .PublishAsync(ctx => Task.FromResult(
-                    new RunBankTransfer(ctx.Saga.CorrelationId, ctx.Saga.Amount, ctx.Saga.BankAccountId)))
+                    new RunBankTransfer(ctx.Saga.CorrelationId, ctx.Saga.EmployeeId, ctx.Saga.Amount, ctx.Saga.PayPeriodNumber, ctx.Saga.BankAccountId)))
         );
 
         SetCompletedWhenFinalized();

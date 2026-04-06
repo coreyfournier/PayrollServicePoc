@@ -28,7 +28,7 @@ public class RunBalanceCheckConsumer : IConsumer<RunBalanceCheck>
 
         var balance = await _balanceService.GetCurrentBalanceAsync(msg.EmployeeId, msg.PayPeriodNumber);
         var available = balance?.AvailableBalance ?? 0;
-        var sufficient = balance == null || available >= msg.Amount;
+        var sufficient = balance != null && available >= msg.Amount;
 
         var result = new BalanceCheckCompleted(msg.TransferId, sufficient, available);
         await context.Publish(result);

@@ -11,10 +11,6 @@ function PayDetailModal({ employee, transfers, onClose, onTransfer }) {
   const formatCurrency = (val) => `$${Number(val).toFixed(2)}`;
   const payTypeLabel = pa.payType === '2' || pa.payType === 'Salary' ? 'Salary' : 'Hourly';
   const period = String(pa.payPeriodNumber);
-  const transferredAmount = (transfers || [])
-    .filter(t => t.status !== 'Failed' && String(t.payPeriodNumber) === period)
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-  const availableBalance = Number(pa.netPay) - transferredAmount;
 
   return (
     <div className="confirm-modal-overlay" onClick={onClose}>
@@ -350,7 +346,7 @@ export default function EmployeeList() {
                 </tr>
               </thead>
               <tbody>
-                {employees.map((employee) => (
+                {[...employees].sort((a, b) => a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName)).map((employee) => (
                   <tr
                     key={employee.id}
                     className={`${employee.isActive ? '' : 'inactive'} ${getHighlightClass(employee.id)}`}

@@ -10,10 +10,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
 
   const [transfers, setTransfers] = useState([]);
 
-  const transferredAmount = transfers
-    .filter(t => t.status !== 'Failed' && String(t.payPeriodNumber) === payPeriod)
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-  const availableBalance = netPay - transferredAmount;
+  const availableBalance = netPay - Number(pa?.transferTotalAmount || 0);
   const [canTransfer, setCanTransfer] = useState(true);
   const [transferLimits, setTransferLimits] = useState(null);
   const [bankAccounts, setBankAccounts] = useState([]);
@@ -137,6 +134,13 @@ export default function TransferPanel({ employee, onClose, onBack }) {
       if (!res.ok) {
         const text = await res.text();
         setError(text || `HTTP ${res.status}`);
+      } else {
+        // Optimistically update status while waiting for subscription event
+        setTransfers(prev => prev.map(t =>
+          t.id === transferId
+            ? { ...t, status: accepted ? 'AcceptPending' : 'RejectPending' }
+            : t
+        ));
       }
     } catch (err) {
       setError(err.message);

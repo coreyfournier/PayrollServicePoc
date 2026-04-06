@@ -17,7 +17,7 @@ public record RetryBankTransfer(Guid TransferId)
 // Workflow commands (saga → step consumers via RabbitMQ)
 public record RunBalanceCheck(Guid TransferId, Guid EmployeeId, decimal Amount, long PayPeriodNumber);
 public record RunFraudCheck(Guid TransferId);
-public record RunBankTransfer(Guid TransferId, decimal Amount, Guid BankAccountId);
+public record RunBankTransfer(Guid TransferId, Guid EmployeeId, decimal Amount, long PayPeriodNumber, Guid BankAccountId);
 
 // Workflow step completion events (step consumers → saga via RabbitMQ)
 public record BalanceCheckCompleted(Guid TransferId, bool Sufficient, decimal? CurrentBalance);

@@ -150,6 +150,12 @@ public class Transfer : Entity
         AddDomainEvent(new TransferBalanceChangedEvent(Id, EmployeeId, Amount, currentBalance, PayPeriodNumber));
     }
 
+    public void AdjustAmountToBalance()
+    {
+        if (CurrentBalance.HasValue && CurrentBalance.Value < Amount)
+            Amount = CurrentBalance.Value;
+    }
+
     public void MarkFailed(string reason)
     {
         Status = TransferStatus.Failed;

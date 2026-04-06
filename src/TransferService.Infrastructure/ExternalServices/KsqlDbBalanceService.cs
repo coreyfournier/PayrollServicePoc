@@ -76,6 +76,7 @@ public class KsqlDbBalanceService : IBalanceService
                         return cols[0].GetDecimal();
                     }
                 }
+                return null; // Valid JSON array but no row data
             }
         }
         catch (JsonException)

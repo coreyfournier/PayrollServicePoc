@@ -9,6 +9,7 @@ public class PayrollApiClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly HttpClient _transferHttp;
+    private readonly HttpClient _listenerHttp;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -19,6 +20,7 @@ public class PayrollApiClient : IDisposable
     {
         _http = new HttpClient { BaseAddress = new Uri(ServiceEndpoints.PayrollApi) };
         _transferHttp = new HttpClient { BaseAddress = new Uri(ServiceEndpoints.TransferApi) };
+        _listenerHttp = new HttpClient { BaseAddress = new Uri(ServiceEndpoints.ListenerApi) };
     }
 
     // Employees
@@ -29,10 +31,10 @@ public class PayrollApiClient : IDisposable
         return (await resp.Content.ReadFromJsonAsync<List<EmployeeResponse>>(JsonOptions))!;
     }
 
-    // Bank Accounts (on transfer-api)
+    // Bank Accounts (on listener-api)
     public async Task<List<BankAccountResponse>> GetBankAccountsAsync(Guid employeeId)
     {
-        var resp = await _transferHttp.GetAsync($"/api/bankaccounts/employee/{employeeId}");
+        var resp = await _listenerHttp.GetAsync($"/api/bankaccounts/employee/{employeeId}");
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<List<BankAccountResponse>>(JsonOptions))!;
     }
@@ -82,6 +84,7 @@ public class PayrollApiClient : IDisposable
     {
         _http.Dispose();
         _transferHttp.Dispose();
+        _listenerHttp.Dispose();
     }
 }
 
