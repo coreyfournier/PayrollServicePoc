@@ -123,5 +123,23 @@ public class TransferBalanceVerificationTests
 
         if (transfer.Status == StatusCompleted)
             transfer.ExternalReferenceId.Should().NotBeNullOrEmpty();
+
+        // Amount should be adjusted to the available balance, not the original $5000
+        transfer.Amount.Should().BeLessThan(amount,
+            "accepted transfer amount should be adjusted to the available balance");
+
+        // Verify MySQL also reflects the adjusted amount
+        var mysqlRecords = await PollingHelper.WaitForAsync(
+            () => _fixture.Db.GetMySqlTransfersAsync(employee.Id),
+            records => records.Any(r => r.Id == transferId &&
+                (r.Status == "Completed" || r.Status == "Failed")),
+            timeout: TimeSpan.FromSeconds(30),
+            timeoutMessage: "Transfer event did not propagate to MySQL");
+
+        var mysqlRecord = mysqlRecords.First(r => r.Id == transferId);
+        mysqlRecord.Amount.Should().BeLessThan(amount,
+            "MySQL transfer amount should reflect the adjusted amount, not the original");
+        mysqlRecord.Amount.Should().Be(transfer.Amount,
+            "MySQL amount should match the transfer-api amount");
     }
 }

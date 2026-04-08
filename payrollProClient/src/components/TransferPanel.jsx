@@ -355,7 +355,7 @@ export default function TransferPanel({ employee, onClose, onBack }) {
                   {t.status === 'AwaitingConfirmation' && (
                     <div className="transfer-card-actions">
                       {t.currentBalance != null && (
-                        <span className="transfer-balance">Balance: {formatCurrency(t.currentBalance)}</span>
+                        <span className="transfer-balance">Allowed transfer amount: {formatCurrency(t.currentBalance)}</span>
                       )}
                       <div className="transfer-card-buttons">
                         <button className="btn btn-sm btn-accept" onClick={() => handleAccept(t.id, true)}>Accept</button>

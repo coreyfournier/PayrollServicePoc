@@ -212,6 +212,7 @@ public class EventProcessor
             }
 
             existing.Status = newStatus;
+            existing.Amount = eventData.Amount;
             existing.UpdatedAt = eventTime != default ? eventTime : DateTime.UtcNow;
             existing.WorkflowStepsJson = eventData.SerializeWorkflowSteps();
             existing.ExternalReferenceId = eventData.ExternalReferenceId;

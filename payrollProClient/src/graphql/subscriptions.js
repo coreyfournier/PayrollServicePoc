@@ -53,6 +53,7 @@ export const TRANSFER_CHANGE_SUBSCRIPTION = `
         completedAt
         failureReason
         externalReferenceId
+        currentBalance
         updatedAt
         workflowSteps {
           name
